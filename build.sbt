@@ -137,9 +137,8 @@ val LTSJava = JavaSpec.temurin("11")
 val LatestJava = JavaSpec.temurin("17")
 val ScalaJSJava = OldGuardJava
 val ScalaNativeJava = OldGuardJava
-val GraalVM = JavaSpec.graalvm("17")
 
-ThisBuild / githubWorkflowJavaVersions := Seq(OldGuardJava, LTSJava, LatestJava, GraalVM)
+ThisBuild / githubWorkflowJavaVersions := Seq(OldGuardJava, LTSJava, LatestJava)
 ThisBuild / githubWorkflowOSes := Seq(PrimaryOS, Windows, MacOS)
 
 ThisBuild / githubWorkflowBuildPreamble ++= Seq(
@@ -153,11 +152,6 @@ ThisBuild / githubWorkflowBuildPreamble ++= Seq(
     List("npm install"),
     name = Some("Install jsdom and source-map-support"),
     cond = Some("matrix.ci == 'ciJS'")
-  ),
-  WorkflowStep.Run(
-    List("gu install native-image"),
-    name = Some("Install GraalVM Native Image"),
-    cond = Some(s"matrix.java == '${GraalVM.render}'")
   ),
   WorkflowStep.Use(
     UseRef.Public(
@@ -194,12 +188,6 @@ ThisBuild / githubWorkflowBuild := Seq("JVM", "JS", "Native").map { platform =>
     name = Some("Test Example JavaScript App Using Node"),
     cond = Some(s"matrix.ci == 'ciJS' && matrix.os == '$PrimaryOS'")
   ),
-  WorkflowStep.Sbt(
-    List("graalVMExample/nativeImage", "graalVMExample/nativeImageRun"),
-    name = Some("Test GraalVM Native Image"),
-    cond = Some(
-      s"matrix.scala == '$Scala213' && matrix.java == '${GraalVM.render}' && matrix.os == '$PrimaryOS'")
-  ),
   WorkflowStep.Run(
     List("example/test-native.sh ${{ matrix.scala }}"),
     name = Some("Test Example Native App Using Binary"),
@@ -228,7 +216,7 @@ ThisBuild / githubWorkflowBuildMatrixExclusions := {
   val scalaJavaFilters = for {
     scala <- (ThisBuild / githubWorkflowScalaVersions).value.filterNot(Set(Scala213))
     java <- (ThisBuild / githubWorkflowJavaVersions).value.filterNot(Set(OldGuardJava))
-    if !(scala == Scala3 && (java == LatestJava || java == GraalVM))
+    if !(scala == Scala3 && java == LatestJava)
   } yield MatrixExclude(Map("scala" -> scala, "java" -> java.render))
 
   val windowsAndMacScalaFilters =
@@ -270,12 +258,7 @@ ThisBuild / githubWorkflowBuildMatrixExclusions := {
     )
   }
 
-  // Nice-to-haves but unreliable in CI
-  val flakyFilters = Seq(
-    MatrixExclude(Map("os" -> Windows, "java" -> GraalVM.render))
-  )
-
-  scalaJavaFilters ++ windowsAndMacScalaFilters ++ jsScalaFilters ++ jsJavaAndOSFilters ++ nativeJavaAndOSFilters ++ flakyFilters
+  scalaJavaFilters ++ windowsAndMacScalaFilters ++ jsScalaFilters ++ jsJavaAndOSFilters ++ nativeJavaAndOSFilters
 }
 
 lazy val useJSEnv =
@@ -919,8 +902,8 @@ lazy val testsJVM = tests
   )
 
 /**
- * Implementations of standard functionality (e.g. Semaphore, Console, Queue) purely in terms
- * of the typeclasses, with no dependency on IO. In most cases, the *tests* for these
+ * Implementations of standard functionality (e.g. Semaphore, Console, Queue) purely in terms of
+ * the typeclasses, with no dependency on IO. In most cases, the *tests* for these
  * implementations will require IO, and thus those tests will be located within the core
  * project.
  */
@@ -997,10 +980,14 @@ lazy val std = crossProject(JSPlatform, JVMPlatform, NativePlatform)
         ProblemFilters.exclude[MissingClassProblem](
           "cats.effect.std.Dispatcher$Mode$Sequential$"),
         // #4052, private classes
-        ProblemFilters.exclude[MissingTypesProblem]("cats.effect.std.Dispatcher$RegState$Unstarted$"),
-        ProblemFilters.exclude[DirectMissingMethodProblem]("cats.effect.std.Dispatcher#RegState#Unstarted.*"),
-        ProblemFilters.exclude[FinalMethodProblem]("cats.effect.std.Dispatcher#RegState#Unstarted.toString"),
-        ProblemFilters.exclude[DirectMissingMethodProblem]("cats.effect.std.Dispatcher#Registration#Primary.*"),
+        ProblemFilters.exclude[MissingTypesProblem](
+          "cats.effect.std.Dispatcher$RegState$Unstarted$"),
+        ProblemFilters.exclude[DirectMissingMethodProblem](
+          "cats.effect.std.Dispatcher#RegState#Unstarted.*"),
+        ProblemFilters.exclude[FinalMethodProblem](
+          "cats.effect.std.Dispatcher#RegState#Unstarted.toString"),
+        ProblemFilters.exclude[DirectMissingMethodProblem](
+          "cats.effect.std.Dispatcher#Registration#Primary.*")
       )
   )
   .jsSettings(
