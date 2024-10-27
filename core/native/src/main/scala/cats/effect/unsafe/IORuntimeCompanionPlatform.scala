@@ -31,7 +31,7 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
     val loop = new EventLoopExecutorScheduler[system.Poller](64, system)
     val poller = loop.poller
     val api = system.makeApi(
-      new PollingContext[system.Poller] {
+      new UnsealedPollingContext[system.Poller] {
         def accessPoller(cb: system.Poller => Unit) = cb(poller)
         def ownPoller(poller: system.Poller) = true
       }

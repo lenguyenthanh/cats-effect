@@ -72,7 +72,7 @@ private[effect] final class WorkStealingThreadPool[P <: AnyRef](
     reportFailure0: Throwable => Unit
 ) extends ExecutionContextExecutor
     with Scheduler
-    with PollingContext[P] {
+    with UnsealedPollingContext[P] {
 
   import TracingConstants._
   import WorkStealingThreadPoolConstants._

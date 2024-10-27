@@ -104,7 +104,7 @@ abstract class PollingSystem {
 
 }
 
-trait PollingContext[P] {
+sealed trait PollingContext[P] {
 
   /**
    * Register a callback to obtain a thread-local `Poller`
@@ -118,6 +118,8 @@ trait PollingContext[P] {
    */
   def ownPoller(poller: P): Boolean
 }
+
+private[unsafe] trait UnsealedPollingContext[P] extends PollingContext[P]
 
 object PollingSystem {
 
