@@ -31,8 +31,8 @@ final class SelectorSystem private (selectorProvider: SelectorProvider) extends 
 
   def close(): Unit = ()
 
-  def makeApi(provider: PollerProvider[Poller]): Selector =
-    new SelectorImpl(provider, selectorProvider)
+  def makeApi(ctx: PollingContext[Poller]): Selector =
+    new SelectorImpl(ctx, selectorProvider)
 
   def makePoller(): Poller = new Poller(selectorProvider.openSelector())
 
@@ -100,13 +100,13 @@ final class SelectorSystem private (selectorProvider: SelectorProvider) extends 
   }
 
   final class SelectorImpl private[SelectorSystem] (
-      pollerProvider: PollerProvider[Poller],
+      ctx: PollingContext[Poller],
       val provider: SelectorProvider
   ) extends Selector {
 
     def select(ch: SelectableChannel, ops: Int): IO[Int] = IO.async { selectCb =>
       IO.async_[Option[IO[Unit]]] { cb =>
-        pollerProvider.accessPoller { poller =>
+        ctx.accessPoller { poller =>
           try {
             val selector = poller.selector
             val key = ch.keyFor(selector)
@@ -123,7 +123,7 @@ final class SelectorSystem private (selectorProvider: SelectorProvider) extends 
             }
 
             val cancel = IO {
-              if (pollerProvider.ownPoller(poller))
+              if (ctx.ownPoller(poller))
                 node.remove()
               else
                 node.clear()

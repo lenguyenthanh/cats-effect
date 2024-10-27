@@ -51,7 +51,7 @@ abstract class PollingSystem {
   /**
    * Creates a new instance of the user-facing interface.
    */
-  def makeApi(provider: PollerProvider[Poller]): Api
+  def makeApi(ctx: PollingContext[Poller]): Api
 
   /**
    * Creates a new instance of the thread-local data structure used for polling.
@@ -104,7 +104,7 @@ abstract class PollingSystem {
 
 }
 
-trait PollerProvider[P] {
+trait PollingContext[P] {
 
   /**
    * Register a callback to obtain a thread-local `Poller`

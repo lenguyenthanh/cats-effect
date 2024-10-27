@@ -24,7 +24,7 @@ object SleepSystem extends PollingSystem {
 
   def close(): Unit = ()
 
-  def makeApi(provider: PollerProvider[Poller]): Api = this
+  def makeApi(ctx: PollingContext[Poller]): Api = this
 
   def makePoller(): Poller = this
 
