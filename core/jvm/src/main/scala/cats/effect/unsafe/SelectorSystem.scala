@@ -25,16 +25,16 @@ import java.util.Iterator
 
 import SelectorSystem._
 
-final class SelectorSystem private (selectorProvider: SelectorProvider) extends PollingSystem {
+final class SelectorSystem private (provider: SelectorProvider) extends PollingSystem {
 
   type Api = Selector
 
   def close(): Unit = ()
 
   def makeApi(ctx: PollingContext[Poller]): Selector =
-    new SelectorImpl(ctx, selectorProvider)
+    new SelectorImpl(ctx, provider)
 
-  def makePoller(): Poller = new Poller(selectorProvider.openSelector())
+  def makePoller(): Poller = new Poller(provider.openSelector())
 
   def closePoller(poller: Poller): Unit =
     poller.selector.close()
