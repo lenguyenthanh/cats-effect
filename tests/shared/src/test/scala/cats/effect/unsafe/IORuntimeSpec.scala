@@ -16,17 +16,23 @@
 
 package cats.effect.unsafe
 
-import cats.effect.tracing.TracingConstants
+import cats.effect.BaseSpec
 
-import scala.concurrent.ExecutionContext
+class IORuntimeSpec extends BaseSpec {
 
-private[unsafe] trait FiberMonitorCompanionPlatform {
-  def apply(compute: ExecutionContext): FiberMonitor = {
-    if (TracingConstants.isStackTracing && compute.isInstanceOf[WorkStealingThreadPool]) {
-      val wstp = compute.asInstanceOf[WorkStealingThreadPool]
-      new FiberMonitor(wstp)
-    } else {
-      new FiberMonitor(null)
+  "IORuntimeSpec" should {
+    "cleanup allRuntimes collection on shutdown" in {
+      val (defaultScheduler, closeScheduler) = Scheduler.createDefaultScheduler()
+
+      val runtime = IORuntime(null, null, defaultScheduler, closeScheduler, IORuntimeConfig())
+
+      IORuntime.allRuntimes.unsafeHashtable().find(_ == runtime) must beEqualTo(Some(runtime))
+
+      val _ = runtime.shutdown()
+
+      IORuntime.allRuntimes.unsafeHashtable().find(_ == runtime) must beEqualTo(None)
     }
+
   }
+
 }

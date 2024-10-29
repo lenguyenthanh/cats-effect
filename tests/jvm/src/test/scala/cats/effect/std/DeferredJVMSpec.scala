@@ -18,7 +18,7 @@ package cats.effect
 package std
 
 import cats.effect.kernel.Deferred
-import cats.effect.unsafe.IORuntime
+import cats.effect.unsafe.{IORuntime, IORuntimeConfig, Scheduler}
 
 import org.specs2.mutable.Specification
 import org.specs2.specification.BeforeAfterEach
@@ -47,7 +47,7 @@ abstract class BaseDeferredJVMTests(parallelism: Int)
 
   implicit val runtime: IORuntime = IORuntime.global
 
-  def before =
+  def before: Any =
     service = Executors.newFixedThreadPool(
       parallelism,
       new ThreadFactory {
@@ -61,7 +61,7 @@ abstract class BaseDeferredJVMTests(parallelism: Int)
       }
     )
 
-  def after = {
+  def after: Any = {
     service.shutdown()
     assert(service.awaitTermination(60, TimeUnit.SECONDS), "has active threads")
   }
@@ -232,12 +232,12 @@ abstract class BaseDeferredJVMTests(parallelism: Int)
 
     try {
       ioa.unsafeRunTimed(10.seconds)(
-        unsafe.IORuntime(
+        IORuntime(
           ctx,
           ctx,
-          unsafe.Scheduler.fromScheduledExecutor(scheduler),
+          Scheduler.fromScheduledExecutor(scheduler),
           () => (),
-          unsafe.IORuntimeConfig()))
+          IORuntimeConfig()))
     } finally {
       executor.shutdown()
       scheduler.shutdown()

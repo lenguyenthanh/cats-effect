@@ -41,7 +41,7 @@ import scala.util.{Either, Left, Right}
  * `A`. This is to support monad transformers. Consider
  *
  * {{{
- * val oc: OutcomeIO[Int] =
+ * val oc: OptionT[IO, Outcome[OptionT[IO, *], Throwable, Int]] =
  *   for {
  *     fiber <- Spawn[OptionT[IO, *]].start(OptionT.none[IO, Int])
  *     oc <- fiber.join
@@ -49,7 +49,15 @@ import scala.util.{Either, Left, Right}
  * }}}
  *
  * If the fiber succeeds then there is no value of type `Int` to be wrapped in `Succeeded`,
- * hence `Succeeded` contains a value of type `OptionT[IO, Int]` instead.
+ * hence `Succeeded` contains a value of type `OptionT[IO, Int]` instead:
+ *
+ * {{{
+ * def run: IO[Unit] =
+ *   for {
+ *     res <- oc.flatMap(_.embedNever).value // `res` is `Option[Int]` here
+ *     _ <- Console[IO].println(res) // prints "None"
+ *   } yield ()
+ * }}}
  *
  * In general you can assume that binding on the value of type `F[A]` contained in `Succeeded`
  * does not perform further effects. In the case of `IO` that means that the outcome has been
@@ -229,8 +237,8 @@ object Outcome extends LowPriorityImplicits {
         }
 
       @tailrec
-      def tailRecM[A, B](a: A)(f: A => Outcome[F, E, Either[A, B]]): Outcome[F, E, B] =
-        f(a) match {
+      def tailRecM[A, B](a0: A)(f: A => Outcome[F, E, Either[A, B]]): Outcome[F, E, B] =
+        f(a0) match {
           case Succeeded(fa) =>
             Traverse[F].sequence[Either[A, *], B](fa) match { // Dotty can't infer this
               case Left(a) => tailRecM(a)(f)
