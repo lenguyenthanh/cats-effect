@@ -362,6 +362,13 @@ class IOAppSpec extends Specification {
           "[WARNING] A Cats Effect worker thread was detected to be in a blocked state")
       }
 
+      "shut down WSTP on fatal error without IOApp" in {
+        val h = platform("FatalErrorShutsDownRt", List.empty)
+        h.awaitStatus()
+        h.stdout() must not(contain("sadness"))
+        h.stdout() must contain("done")
+      }
+
       ()
     }
 
