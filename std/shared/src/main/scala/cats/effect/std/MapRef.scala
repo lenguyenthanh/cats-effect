@@ -21,6 +21,7 @@ import cats.data._
 import cats.effect.kernel._
 import cats.syntax.all._
 
+import java.util.Hashtable
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -34,12 +35,15 @@ import java.util.concurrent.ConcurrentHashMap
  * concurrent updates may be executed independently to each other, as long as their keys belong
  * to different shards.
  */
-trait MapRef[F[_], K, V] extends Function1[K, Ref[F, V]] {
+trait MapRef[F[_], K, V] extends Function1[K, Ref[F, V]] { outer =>
 
   /**
    * Access the reference for this Key
    */
   def apply(k: K): Ref[F, V]
+
+  def mapK[G[_]](f: F ~> G)(implicit G: Functor[G]): MapRef[G, K, V] =
+    outer(_).mapK(f)
 }
 
 object MapRef extends MapRefCompanionPlatform {
@@ -123,7 +127,7 @@ object MapRef extends MapRefCompanionPlatform {
       ref: Ref[F, Map[K, V]]): MapRef[F, K, Option[V]] =
     k => Ref.lens(ref)(_.get(k), m => _.fold(m - k)(v => m + (k -> v)))
 
-  private class ConcurrentHashMapImpl[F[_], K, V](chm: ConcurrentHashMap[K, V], sync: Sync[F])
+  private class JavaMapImpl[F[_], K, V](chm: java.util.Map[K, V], sync: Sync[F])
       extends MapRef[F, K, Option[V]] {
     private implicit def syncF: Sync[F] = sync
 
@@ -241,7 +245,11 @@ object MapRef extends MapRefCompanionPlatform {
    */
   def fromConcurrentHashMap[F[_]: Sync, K, V](
       map: ConcurrentHashMap[K, V]): MapRef[F, K, Option[V]] =
-    new ConcurrentHashMapImpl[F, K, V](map, Sync[F])
+    new JavaMapImpl[F, K, V](map, Sync[F])
+
+  private[std] def fromHashtable[F[_]: Sync, K, V](
+      map: Hashtable[K, V]): MapRef[F, K, Option[V]] =
+    new JavaMapImpl[F, K, V](map, Sync[F])
 
   /**
    * This allocates mutable memory, so it has to be inside F. The way to use things like this is

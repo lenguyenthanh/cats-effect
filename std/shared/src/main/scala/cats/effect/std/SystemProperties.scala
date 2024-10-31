@@ -18,39 +18,17 @@ package cats.effect.std
 
 import cats.{~>, Applicative, Functor}
 import cats.data.{EitherT, IorT, Kleisli, OptionT, ReaderWriterStateT, StateT, WriterT}
-import cats.effect.kernel.Sync
+import cats.effect.kernel.{Ref, Sync}
 import cats.kernel.Monoid
 
-import org.typelevel.scalaccompat.annotation._
+import java.util.Hashtable
 
-import scala.collection.immutable.Map
+trait SystemProperties[F[_]] extends MapRef[F, String, Option[String]] { outer =>
 
-trait SystemProperties[F[_]] { self =>
+  def apply(key: String): Ref[F, Option[String]]
 
-  /**
-   * Retrieves the value for the specified key.
-   */
-  def get(key: String): F[Option[String]]
-
-  /**
-   * Sets the value for the specified key to `value` disregarding any previous value for the
-   * same key.
-   */
-  def set(key: String, value: String): F[Unit]
-
-  /**
-   * Removes the property.
-   */
-  def unset(key: String): F[Unit]
-
-  def entries: F[Map[String, String]]
-
-  def mapK[G[_]](f: F ~> G): SystemProperties[G] = new SystemProperties[G] {
-    def get(key: String): G[Option[String]] = f(self.get(key))
-    def set(key: String, value: String): G[Unit] = f(self.set(key, value))
-    def unset(key: String) = f(self.unset(key))
-    def entries: G[Map[String, String]] = f(self.entries)
-  }
+  override def mapK[G[_]](f: F ~> G)(implicit G: Functor[G]): SystemProperties[G] =
+    outer(_).mapK(f)
 }
 
 object SystemProperties {
@@ -78,7 +56,7 @@ object SystemProperties {
    * [[Prop]] instance built for `cats.data.Kleisli` values initialized with any `F` data type
    * that also implements `Prop`.
    */
-  implicit def catsKleisliSystemProperties[F[_]: SystemProperties, R]
+  implicit def catsKleisliSystemProperties[F[_]: Functor: SystemProperties, R]
       : SystemProperties[Kleisli[F, R, *]] =
     SystemProperties[F].mapK(Kleisli.liftK)
 
@@ -131,22 +109,9 @@ object SystemProperties {
   private[std] final class SyncSystemProperties[F[_]](implicit F: Sync[F])
       extends SystemProperties[F] {
 
-    def get(key: String): F[Option[String]] =
-      F.delay(Option(System.getProperty(key))) // thread-safe
+    private[this] val underlying =
+      MapRef.fromHashtable(System.getProperties().asInstanceOf[Hashtable[String, String]])
 
-    def set(key: String, value: String): F[Unit] =
-      F.void(F.blocking(System.setProperty(key, value)))
-
-    def unset(key: String): F[Unit] = F.void(F.delay(System.clearProperty(key)))
-
-    @nowarn213("cat=deprecation")
-    @nowarn3("cat=deprecation")
-    def entries: F[Map[String, String]] =
-      F.blocking {
-        import scala.collection.JavaConverters._
-        val props = System.getProperties
-        val back = props.clone().asInstanceOf[java.util.Map[String, String]]
-        Map.empty ++ back.asScala
-      }
+    def apply(key: String) = underlying(key)
   }
 }
