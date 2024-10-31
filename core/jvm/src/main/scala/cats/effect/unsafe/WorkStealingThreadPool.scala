@@ -61,7 +61,7 @@ import WorkStealingThreadPool._
  * contention. Work stealing is tried using a linear search starting from a random worker thread
  * index.
  */
-private[effect] final class WorkStealingThreadPool[P](
+private[effect] final class WorkStealingThreadPool[P <: AnyRef](
     threadCount: Int, // number of worker threads
     private[unsafe] val threadPrefix: String, // prefix for the name of worker threads
     private[unsafe] val blockerThreadPrefix: String, // prefix for the name of worker threads currently in a blocking region
@@ -71,7 +71,8 @@ private[effect] final class WorkStealingThreadPool[P](
     system: PollingSystem.WithPoller[P],
     reportFailure0: Throwable => Unit
 ) extends ExecutionContextExecutor
-    with Scheduler {
+    with Scheduler
+    with UnsealedPollingContext[P] {
 
   import TracingConstants._
   import WorkStealingThreadPoolConstants._
@@ -87,7 +88,7 @@ private[effect] final class WorkStealingThreadPool[P](
   private[unsafe] val pollers: Array[P] =
     new Array[AnyRef](threadCount).asInstanceOf[Array[P]]
 
-  private[unsafe] def register(cb: P => Unit): Unit = {
+  def accessPoller(cb: P => Unit): Unit = {
 
     // figure out where we are
     val thread = Thread.currentThread()
@@ -97,8 +98,16 @@ private[effect] final class WorkStealingThreadPool[P](
       if (worker.isOwnedBy(pool)) // we're good
         cb(worker.poller())
       else // possibly a blocking worker thread, possibly on another wstp
-        scheduleExternal(() => register(cb))
-    } else scheduleExternal(() => register(cb))
+        scheduleExternal(() => accessPoller(cb))
+    } else scheduleExternal(() => accessPoller(cb))
+  }
+
+  def ownPoller(poller: P): Boolean = {
+    val thread = Thread.currentThread()
+    if (thread.isInstanceOf[WorkerThread[_]]) {
+      val worker = thread.asInstanceOf[WorkerThread[P]]
+      worker.ownsPoller(poller)
+    } else false
   }
 
   /**
@@ -424,7 +433,7 @@ private[effect] final class WorkStealingThreadPool[P](
    * Updates the internal state to mark the given worker thread as parked.
    *
    * @note
-   *   This method is intentionally duplicated, to accomodate the unconditional code paths in
+   *   This method is intentionally duplicated, to accommodate the unconditional code paths in
    *   the [[WorkerThread]] runloop.
    */
   private[unsafe] def transitionWorkerToParked(): Unit = {

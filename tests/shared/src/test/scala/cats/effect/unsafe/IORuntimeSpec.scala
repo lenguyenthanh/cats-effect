@@ -14,30 +14,25 @@
  * limitations under the License.
  */
 
-package cats.effect
-package unsafe
+package cats.effect.unsafe
 
-object SleepSystem extends PollingSystem {
+import cats.effect.BaseSpec
 
-  type Api = AnyRef
-  type Poller = AnyRef
+class IORuntimeSpec extends BaseSpec {
 
-  def close(): Unit = ()
+  "IORuntimeSpec" should {
+    "cleanup allRuntimes collection on shutdown" in {
+      val (defaultScheduler, closeScheduler) = Scheduler.createDefaultScheduler()
 
-  def makeApi(ctx: PollingContext[Poller]): Api = this
+      val runtime = IORuntime(null, null, defaultScheduler, closeScheduler, IORuntimeConfig())
 
-  def makePoller(): Poller = this
+      IORuntime.allRuntimes.unsafeHashtable().find(_ == runtime) must beEqualTo(Some(runtime))
 
-  def closePoller(poller: Poller): Unit = ()
+      val _ = runtime.shutdown()
 
-  def poll(poller: Poller, nanos: Long, reportFailure: Throwable => Unit): Boolean = {
-    if (nanos > 0)
-      Thread.sleep(nanos / 1000000, (nanos % 1000000).toInt)
-    false
+      IORuntime.allRuntimes.unsafeHashtable().find(_ == runtime) must beEqualTo(None)
+    }
+
   }
-
-  def needsPoll(poller: Poller): Boolean = false
-
-  def interrupt(targetThread: Thread, targetPoller: Poller): Unit = ()
 
 }
