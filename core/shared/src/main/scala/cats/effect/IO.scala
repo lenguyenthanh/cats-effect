@@ -1986,6 +1986,9 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TuplePara
     def pure[A](x: A): IO[A] =
       IO.pure(x)
 
+    override def unit: IO[Unit] =
+      IO.unit
+
     override def guarantee[A](fa: IO[A], fin: IO[Unit]): IO[A] =
       fa.guarantee(fin)
 
