@@ -1016,7 +1016,7 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
         oc.fold(
           canceled,
           failure,
-          { ioa => success(ioa.asInstanceOf[IO.Pure[A]].value) },
+          { ioa => success(ioa.asInstanceOf[IO.Pure[A]].value) }
         )
       },
       this,
