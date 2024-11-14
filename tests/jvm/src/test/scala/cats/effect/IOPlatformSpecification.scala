@@ -20,6 +20,7 @@ import cats.effect.std.Semaphore
 import cats.effect.unsafe.{
   IORuntime,
   IORuntimeConfig,
+  PollingContext,
   PollingSystem,
   SleepSystem,
   WorkStealingThreadPool
@@ -513,10 +514,10 @@ trait IOPlatformSpecification extends DetectPlatform { self: BaseSpec with Scala
             }
           }
 
-          def makeApi(access: (Poller => Unit) => Unit): DummySystem.Api =
+          def makeApi(ctx: PollingContext[Poller]): DummySystem.Api =
             new DummyPoller {
               def poll = IO.async_[Unit] { cb =>
-                access { poller =>
+                ctx.accessPoller { poller =>
                   poller.getAndUpdate(cb :: _)
                   ()
                 }

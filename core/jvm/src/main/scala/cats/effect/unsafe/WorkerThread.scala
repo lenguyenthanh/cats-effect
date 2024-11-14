@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * system when compared to a fixed size thread pool whose worker threads all draw tasks from a
  * single global work queue.
  */
-private[effect] final class WorkerThread[P](
+private[effect] final class WorkerThread[P <: AnyRef](
     idx: Int,
     // Local queue instance with exclusive write access.
     private[this] var queue: LocalQueue,
@@ -292,6 +292,9 @@ private[effect] final class WorkerThread[P](
     fiberBag.forEach(r => foreign ++= captureTrace(r))
     foreign.toMap
   }
+
+  private[unsafe] def ownsPoller(poller: P): Boolean =
+    poller eq _poller
 
   private[unsafe] def ownsTimers(timers: TimerHeap): Boolean =
     sleepers eq timers
@@ -579,7 +582,7 @@ private[effect] final class WorkerThread[P](
             // The dequeued element was a batch of fibers. Enqueue the whole
             // batch on the local queue and execute the first fiber.
 
-            // Make room for the batch if the local queue cannot accomodate
+            // Make room for the batch if the local queue cannot accommodate
             // all of the fibers as is.
             queue.drainBatch(external, rnd)
 

@@ -152,7 +152,7 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
 
     (
       threadPool,
-      pollingSystem.makeApi(threadPool.register),
+      pollingSystem.makeApi(threadPool),
       { () =>
         unregisterMBeans()
         threadPool.shutdown()
@@ -186,7 +186,14 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
     createDefaultComputeThreadPool(self(), threads, threadPrefix)
 
   def createDefaultBlockingExecutionContext(
-      threadPrefix: String = "io-blocking"): (ExecutionContext, () => Unit) = {
+      threadPrefix: String = "io-blocking"
+  ): (ExecutionContext, () => Unit) =
+    createDefaultBlockingExecutionContext(threadPrefix, _.printStackTrace())
+
+  private[effect] def createDefaultBlockingExecutionContext(
+      threadPrefix: String,
+      reportFailure: Throwable => Unit
+  ): (ExecutionContext, () => Unit) = {
     val threadCount = new AtomicInteger(0)
     val executor = Executors.newCachedThreadPool { (r: Runnable) =>
       val t = new Thread(r)
@@ -194,7 +201,7 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
       t.setDaemon(true)
       t
     }
-    (ExecutionContext.fromExecutor(executor), { () => executor.shutdown() })
+    (ExecutionContext.fromExecutor(executor, reportFailure), { () => executor.shutdown() })
   }
 
   def createDefaultScheduler(threadPrefix: String = "io-scheduler"): (Scheduler, () => Unit) = {
@@ -234,18 +241,13 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
       installGlobal {
         val (compute, poller, computeDown) = createWorkStealingComputeThreadPool()
         val (blocking, blockingDown) = createDefaultBlockingExecutionContext()
+        val shutdown = () => {
+          computeDown()
+          blockingDown()
+          resetGlobal()
+        }
 
-        IORuntime(
-          compute,
-          blocking,
-          compute,
-          List(poller),
-          () => {
-            computeDown()
-            blockingDown()
-            resetGlobal()
-          },
-          IORuntimeConfig())
+        IORuntime(compute, blocking, compute, List(poller), shutdown, IORuntimeConfig())
       }
       ()
     }

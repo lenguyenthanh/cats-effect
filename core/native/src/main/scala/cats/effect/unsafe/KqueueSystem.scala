@@ -46,8 +46,8 @@ object KqueueSystem extends PollingSystem {
 
   def close(): Unit = ()
 
-  def makeApi(access: (Poller => Unit) => Unit): FileDescriptorPoller =
-    new FileDescriptorPollerImpl(access)
+  def makeApi(ctx: PollingContext[Poller]): FileDescriptorPoller =
+    new FileDescriptorPollerImpl(ctx)
 
   def makePoller(): Poller = {
     val fd = kqueue()
@@ -67,7 +67,7 @@ object KqueueSystem extends PollingSystem {
   def interrupt(targetThread: Thread, targetPoller: Poller): Unit = ()
 
   private final class FileDescriptorPollerImpl private[KqueueSystem] (
-      access: (Poller => Unit) => Unit
+      ctx: PollingContext[Poller]
   ) extends FileDescriptorPoller {
     def registerFileDescriptor(
         fd: Int,
@@ -76,7 +76,7 @@ object KqueueSystem extends PollingSystem {
     ): Resource[IO, FileDescriptorPollHandle] =
       Resource.eval {
         (Mutex[IO], Mutex[IO]).mapN {
-          new PollHandle(access, fd, _, _)
+          new PollHandle(ctx, fd, _, _)
         }
       }
   }
@@ -86,7 +86,7 @@ object KqueueSystem extends PollingSystem {
     (filter.toLong << 32) | ident.toLong
 
   private final class PollHandle(
-      access: (Poller => Unit) => Unit,
+      ctx: PollingContext[Poller],
       fd: Int,
       readMutex: Mutex[IO],
       writeMutex: Mutex[IO]
@@ -101,7 +101,7 @@ object KqueueSystem extends PollingSystem {
             else
               IO.async[Unit] { kqcb =>
                 IO.async_[Option[IO[Unit]]] { cb =>
-                  access { kqueue =>
+                  ctx.accessPoller { kqueue =>
                     kqueue.evSet(fd, EVFILT_READ, EV_ADD.toUShort, kqcb)
                     cb(Right(Some(IO(kqueue.removeCallback(fd, EVFILT_READ)))))
                   }
@@ -121,7 +121,7 @@ object KqueueSystem extends PollingSystem {
             else
               IO.async[Unit] { kqcb =>
                 IO.async_[Option[IO[Unit]]] { cb =>
-                  access { kqueue =>
+                  ctx.accessPoller { kqueue =>
                     kqueue.evSet(fd, EVFILT_WRITE, EV_ADD.toUShort, kqcb)
                     cb(Right(Some(IO(kqueue.removeCallback(fd, EVFILT_WRITE)))))
                   }
@@ -170,7 +170,7 @@ object KqueueSystem extends PollingSystem {
 
     private[KqueueSystem] def poll(timeout: Long): Boolean = {
 
-      val eventlist = stackalloc[kevent64_s](MaxEvents.toLong)
+      val eventlist = stackalloc[kevent64_s](MaxEvents.toULong)
       var polled = false
 
       @tailrec

@@ -489,11 +489,8 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
   def guarantee(finalizer: IO[Unit]): IO[A] =
     // this is a little faster than the default implementation, which helps Resource
     IO uncancelable { poll =>
-      val handled = finalizer handleErrorWith { t =>
-        IO.executionContext.flatMap(ec => IO(ec.reportFailure(t)))
-      }
-
-      poll(this).onCancel(finalizer).onError(_ => handled).flatTap(_ => finalizer)
+      val onError: PartialFunction[Throwable, IO[Unit]] = { case _ => finalizer.reportError }
+      poll(this).onCancel(finalizer).onError(onError).flatTap(_ => finalizer)
     }
 
   /**
@@ -519,12 +516,10 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
   def guaranteeCase(finalizer: OutcomeIO[A @uncheckedVariance] => IO[Unit]): IO[A] =
     IO.uncancelable { poll =>
       val finalized = poll(this).onCancel(finalizer(Outcome.canceled))
-      val handled = finalized.onError { e =>
-        finalizer(Outcome.errored(e)).handleErrorWith { t =>
-          IO.executionContext.flatMap(ec => IO(ec.reportFailure(t)))
-        }
+      val onError: PartialFunction[Throwable, IO[Unit]] = {
+        case e => finalizer(Outcome.errored(e)).reportError
       }
-      handled.flatTap(a => finalizer(Outcome.succeeded(IO.pure(a))))
+      finalized.onError(onError).flatTap { (a: A) => finalizer(Outcome.succeeded(IO.pure(a))) }
     }
 
   def handleError[B >: A](f: Throwable => B): IO[B] =
@@ -588,8 +583,20 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
   def onCancel(fin: IO[Unit]): IO[A] =
     IO.OnCancel(this, fin)
 
-  def onError(f: Throwable => IO[Unit]): IO[A] =
-    handleErrorWith(t => f(t).voidError *> IO.raiseError(t))
+  @deprecated("Use onError with PartialFunction argument", "3.6.0")
+  def onError(f: Throwable => IO[Unit]): IO[A] = {
+    val pf: PartialFunction[Throwable, IO[Unit]] = { case t => f(t).reportError }
+    onError(pf)
+  }
+
+  /**
+   * Execute a callback on certain errors, then rethrow them. Any non matching error is rethrown
+   * as well.
+   *
+   * Implements `ApplicativeError.onError`.
+   */
+  def onError(pf: PartialFunction[Throwable, IO[Unit]]): IO[A] =
+    handleErrorWith(t => pf.applyOrElse(t, (_: Throwable) => IO.unit) *> IO.raiseError(t))
 
   /**
    * Like `Parallel.parProductL`
@@ -928,6 +935,19 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
   def void: IO[Unit] =
     map(_ => ())
 
+  /**
+   * Similar to [[IO.voidError]], but also reports the error.
+   */
+  private[effect] def reportError(implicit ev: A <:< Unit): IO[Unit] = {
+    val _ = ev
+    asInstanceOf[IO[Unit]].handleErrorWith { t =>
+      IO.executionContext.flatMap(ec => IO(ec.reportFailure(t)))
+    }
+  }
+
+  /**
+   * Discard any error raised by the source.
+   */
   def voidError(implicit ev: A <:< Unit): IO[Unit] = {
     val _ = ev
     asInstanceOf[IO[Unit]].handleError(_ => ())
@@ -1359,7 +1379,12 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TuplePara
    * }
    * }}}
    *
-   * Note that `async` is uncancelable during its registration.
+   * @note
+   *   `async` is always uncancelable during its registration. The created effect will be
+   *   uncancelable during its execution if the registration callback provides no finalizer
+   *   (i.e. evaluates to `None`). If you need the created task to be cancelable, return a
+   *   finalizer effect upon the registration. In a rare case when there's nothing to finalize,
+   *   you can return `Some(IO.unit)` for that.
    *
    * @see
    *   [[async_]] for a simplified variant without a finalizer
@@ -1412,7 +1437,9 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TuplePara
    * This function can be thought of as a safer, lexically-constrained version of `Promise`,
    * where `IO` is like a safer, lazy version of `Future`.
    *
-   * Also, note that `async` is uncancelable during its registration.
+   * @note
+   *   `async_` is uncancelable during both its registration and execution. If you need an
+   *   asyncronous effect to be cancelable, consider using `async` instead.
    *
    * @see
    *   [[async]] for more generic version providing a finalizer
@@ -1430,6 +1457,24 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TuplePara
     IOCont(body, Tracing.calculateTracingEvent(k))
   }
 
+  /**
+   * An effect that requests self-cancelation on the current fiber.
+   *
+   * `canceled` has a return type of `IO[Unit]` instead of `IO[Nothing]` due to execution
+   * continuing in a masked region. In the following example, the fiber requests
+   * self-cancelation in a masked region, so cancelation is suppressed until the fiber is
+   * completely unmasked. `fa` will run but `fb` will not. If `canceled` had a return type of
+   * `IO[Nothing]`, then it would not be possible to continue execution to `fa` (there would be
+   * no `Nothing` value to pass to the `flatMap`).
+   *
+   * {{{
+   *
+   *   IO.uncancelable { _ =>
+   *     IO.canceled *> fa
+   *   } *> fb
+   *
+   * }}}
+   */
   def canceled: IO[Unit] = Canceled
 
   /**
@@ -1776,7 +1821,7 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TuplePara
    *   [[IO.raiseWhen]] for conditionally raising an error
    */
   def whenA(cond: Boolean)(action: => IO[Unit]): IO[Unit] =
-    Applicative[IO].whenA(cond)(action)
+    if (cond) action else IO.unit
 
   /**
    * Returns the given argument if `cond` is false, otherwise `IO.Unit`
@@ -1787,7 +1832,7 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TuplePara
    *   [[IO.raiseWhen]] for conditionally raising an error
    */
   def unlessA(cond: Boolean)(action: => IO[Unit]): IO[Unit] =
-    Applicative[IO].unlessA(cond)(action)
+    whenA(!cond)(action)
 
   /**
    * Returns `raiseError` when the `cond` is true, otherwise `IO.unit`
@@ -1946,6 +1991,9 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TuplePara
     def pure[A](x: A): IO[A] =
       IO.pure(x)
 
+    override def unit: IO[Unit] =
+      IO.unit
+
     override def guarantee[A](fa: IO[A], fin: IO[Unit]): IO[A] =
       fa.guarantee(fin)
 
@@ -1954,6 +2002,9 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TuplePara
 
     override def handleError[A](fa: IO[A])(f: Throwable => A): IO[A] =
       fa.handleError(f)
+
+    override def onError[A](fa: IO[A])(pf: PartialFunction[Throwable, IO[Unit]]): IO[A] =
+      fa.onError(pf)
 
     override def timeout[A](fa: IO[A], duration: FiniteDuration)(
         implicit ev: TimeoutException <:< Throwable): IO[A] = {

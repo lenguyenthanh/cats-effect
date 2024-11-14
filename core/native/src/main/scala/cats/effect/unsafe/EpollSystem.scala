@@ -47,8 +47,8 @@ object EpollSystem extends PollingSystem {
 
   def close(): Unit = ()
 
-  def makeApi(access: (Poller => Unit) => Unit): Api =
-    new FileDescriptorPollerImpl(access)
+  def makeApi(ctx: PollingContext[Poller]): Api =
+    new FileDescriptorPollerImpl(ctx)
 
   def makePoller(): Poller = {
     val fd = epoll_create1(0)
@@ -67,7 +67,7 @@ object EpollSystem extends PollingSystem {
   def interrupt(targetThread: Thread, targetPoller: Poller): Unit = ()
 
   private final class FileDescriptorPollerImpl private[EpollSystem] (
-      access: (Poller => Unit) => Unit)
+      ctx: PollingContext[Poller])
       extends FileDescriptorPoller {
 
     def registerFileDescriptor(
@@ -78,7 +78,7 @@ object EpollSystem extends PollingSystem {
       Resource {
         (Mutex[IO], Mutex[IO]).flatMapN { (readMutex, writeMutex) =>
           IO.async_[(PollHandle, IO[Unit])] { cb =>
-            access { epoll =>
+            ctx.accessPoller { epoll =>
               val handle = new PollHandle(readMutex, writeMutex)
               epoll.register(fd, reads, writes, handle, cb)
             }
@@ -185,7 +185,7 @@ object EpollSystem extends PollingSystem {
 
     private[EpollSystem] def poll(timeout: Long): Boolean = {
 
-      val events = stackalloc[epoll_event](MaxEvents.toLong)
+      val events = stackalloc[epoll_event](MaxEvents.toULong)
       var polled = false
 
       @tailrec

@@ -69,7 +69,7 @@ class FileDescriptorPollerSpec extends BaseSpec {
     Resource
       .make {
         IO {
-          val fd = stackalloc[CInt](2)
+          val fd = stackalloc[CInt](2.toULong)
           if (unistd.pipe(fd) != 0)
             throw new IOException(fromCString(strerror(errno)))
           (fd(0), fd(1))
@@ -130,7 +130,7 @@ class FileDescriptorPollerSpec extends BaseSpec {
         }
       }
 
-      // multiples of 64 to excercise ready queue draining logic
+      // multiples of 64 to exercise ready queue draining logic
       test(64) *> test(128) *>
         test(1000) // a big, non-64-multiple
     }
