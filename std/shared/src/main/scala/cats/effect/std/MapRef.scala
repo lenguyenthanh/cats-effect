@@ -47,7 +47,7 @@ object MapRef extends MapRefCompanionPlatform {
 
   /**
    * Default constructor for [[MapRef]]. If [[Sync]] is available, it will delegate to
-   * [[ofConcurrentHashMap], otherwise it will fallback to [[ofShardedImmutableMap]].
+   * [[ofConcurrentHashMap]], otherwise it will fallback to [[ofShardedImmutableMap]].
    */
   def apply[F[_]: Concurrent, K, V]: F[MapRef[F, K, Option[V]]] = {
     Concurrent[F] match {
