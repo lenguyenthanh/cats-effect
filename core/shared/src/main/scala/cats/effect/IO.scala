@@ -1009,21 +1009,16 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
 
     val fiber = new IOFiber[A](
       Map.empty,
-      oc =>
+      { oc =>
+        if (registerCallback) {
+          runtime.fiberErrorCbs.remove(failure)
+        }
         oc.fold(
-          {
-            runtime.fiberErrorCbs.remove(failure)
-            canceled
-          },
-          { t =>
-            runtime.fiberErrorCbs.remove(failure)
-            failure(t)
-          },
-          { ioa =>
-            runtime.fiberErrorCbs.remove(failure)
-            success(ioa.asInstanceOf[IO.Pure[A]].value)
-          }
-        ),
+          canceled,
+          failure,
+          { ioa => success(ioa.asInstanceOf[IO.Pure[A]].value) }
+        )
+      },
       this,
       runtime.compute,
       runtime
