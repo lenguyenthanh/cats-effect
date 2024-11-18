@@ -158,7 +158,7 @@ object Dequeue {
           state.modify {
             case State(queue, size, takers, offerers) if takers.nonEmpty =>
               val (taker, rest) = takers.dequeue
-              State(update(queue), size, rest, offerers) -> taker.complete(()).void
+              State(update(queue), size + 1, rest, offerers) -> taker.complete(()).void
 
             case State(queue, size, takers, offerers) if size < capacity =>
               State(update(queue), size + 1, takers, offerers) -> F.unit
