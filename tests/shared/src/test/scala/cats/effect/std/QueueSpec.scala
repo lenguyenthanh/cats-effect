@@ -965,5 +965,11 @@ trait QueueTests[Q[_[_], _]] { self: BaseSpec =>
         r <- IO(v2 must beEqualTo(2))
       } yield r
     }
+
+    "should return the queue size when take precedes offer" in ticked { implicit ticker =>
+      constructor(10).flatMap { q =>
+        take(q).background.use { took => IO.sleep(1.second) *> offer(q, 1) *> took *> size(q) }
+      } must completeAs(0)
+    }
   }
 }
