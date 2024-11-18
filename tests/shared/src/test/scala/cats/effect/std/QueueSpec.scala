@@ -974,7 +974,9 @@ trait QueueTests[Q[_[_], _]] { self: BaseSpec =>
 
     "should return the queue size when take precedes tryOffer" in ticked { implicit ticker =>
       constructor(10).flatMap { q =>
-        take(q).background.use { took => IO.sleep(1.second) *> tryOffer(q, 1) *> took *> size(q) }
+        take(q).background.use { took =>
+          IO.sleep(1.second) *> tryOffer(q, 1) *> took *> size(q)
+        }
       } must completeAs(0)
     }
   }
