@@ -9,7 +9,7 @@ title: FAQ
 
 ```scala-cli
 //> using scala "2.13.8"
-//> using dep "org.typelevel::cats-effect::3.5.5"
+//> using dep "org.typelevel::cats-effect::3.5.6"
 
 import cats.effect._
 
