@@ -14,19 +14,12 @@
  * limitations under the License.
  */
 
-package cats.effect.unsafe
+package cats.effect
+package unsafe
 
-import scala.concurrent.duration._
-
-// JVM WSTP sets ExternalQueueTicks = 64 so we steal it here
-private[effect] object QueueExecutorScheduler extends PollingExecutorScheduler(64) {
-
-  def poll(timeout: Duration): Boolean = {
-    if (timeout != Duration.Zero && timeout.isFinite) {
-      val nanos = timeout.toNanos
-      Thread.sleep(nanos / 1000000, (nanos % 1000000).toInt)
-    }
-    false
-  }
-
+/**
+ * An introspectable executor that runs fibers. Useful for fiber dumps.
+ */
+private[unsafe] trait FiberExecutor {
+  def liveTraces(): Map[IOFiber[_], Trace]
 }

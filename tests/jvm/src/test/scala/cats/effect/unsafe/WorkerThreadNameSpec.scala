@@ -16,7 +16,7 @@
 
 package cats.effect.unsafe
 
-import cats.effect.{BaseSpec /*, IO*/}
+import cats.effect.BaseSpec
 import cats.effect.testkit.TestInstances
 
 import scala.concurrent.duration._
@@ -30,7 +30,7 @@ class WorkerThreadNameSpec extends BaseSpec with TestInstances {
           s"io-blocking-${getClass.getName}")
       val (scheduler, schedDown) =
         IORuntime.createDefaultScheduler(threadPrefix = s"io-scheduler-${getClass.getName}")
-      val (compute, compDown) =
+      val (compute, _, compDown) =
         IORuntime.createWorkStealingComputeThreadPool(
           threads = 1,
           threadPrefix = s"io-compute-${getClass.getName}",

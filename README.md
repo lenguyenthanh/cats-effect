@@ -18,7 +18,7 @@
 libraryDependencies += "org.typelevel" %% "cats-effect" % "3.5.6"
 ```
 
-The above represents the core, stable dependency which brings in the entirety of Cats Effect. This is *most likely* what you want. All current Cats Effect releases are published for Scala 2.12, 2.13, 3.0, and Scala.js 1.7.
+The above represents the core, stable dependency which brings in the entirety of Cats Effect. This is *most likely* what you want. All current Cats Effect releases are published for Scala 2.12, 2.13, 3.2, and Scala.js 1.13.
 
 Or, if you prefer a less bare-bones starting point, you can try [the Giter8 template](https://github.com/typelevel/ce3.g8):
 
@@ -161,7 +161,7 @@ If everything goes well, your browser will open at the end of this.
 ## License
 
 ```
-Copyright 2017-2022 Typelevel
+Copyright 2017-2024 Typelevel
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
