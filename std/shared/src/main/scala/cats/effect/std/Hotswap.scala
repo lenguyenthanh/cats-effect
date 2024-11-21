@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -113,15 +113,13 @@ object Hotswap {
 
       def finalize(state: Ref[F, State]): F[Unit] =
         state.getAndSet(Finalized).flatMap {
-          case Acquired(_, finalizer) => finalizer
+          case Acquired(_, finalizer) => exclusive.surround(finalizer)
           case Cleared => F.unit
           case Finalized => raise("Hotswap already finalized")
         }
 
       def raise(message: String): F[Unit] =
         F.raiseError[Unit](new RuntimeException(message))
-
-      def shared: Resource[F, Unit] = semaphore.permit
 
       def exclusive: Resource[F, Unit] =
         Resource.makeFull[F, Unit](poll => poll(semaphore.acquireN(Long.MaxValue)))(_ =>
@@ -131,22 +129,23 @@ object Hotswap {
         new Hotswap[F, R] {
 
           override def swap(next: Resource[F, R]): F[R] =
-            exclusive.surround {
-              F.uncancelable { poll =>
-                poll(next.allocated).flatMap {
-                  case (r, fin) =>
+            F.uncancelable { poll =>
+              poll(next.allocated).flatMap {
+                case (r, fin) =>
+                  exclusive.mapK(poll).onCancel(Resource.eval(fin)).surround {
                     swapFinalizer(Acquired(r, fin)).as(r)
-                }
+                  }
               }
             }
 
           override def get: Resource[F, Option[R]] =
-            shared.evalMap { _ =>
-              state.get.map {
-                case Acquired(r, _) => Some(r)
-                case _ => None
-              }
-            }
+            Resource.makeFull[F, Option[R]] { poll =>
+              poll(semaphore.acquire) *> // acquire shared lock
+                state.get.flatMap {
+                  case Acquired(r, _) => F.pure(Some(r))
+                  case _ => semaphore.release.as(None)
+                }
+            } { r => if (r.isDefined) semaphore.release else F.unit }
 
           override def clear: F[Unit] =
             exclusive.surround(swapFinalizer(Cleared).uncancelable)

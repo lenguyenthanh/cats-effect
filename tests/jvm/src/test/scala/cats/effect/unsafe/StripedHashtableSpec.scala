@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,7 @@ class StripedHashtableSpec extends BaseSpec {
       val (blocking, blockDown) =
         IORuntime.createDefaultBlockingExecutionContext(threadPrefix =
           s"io-blocking-${getClass.getName}")
-      val (compute, compDown) =
+      val (compute, _, compDown) =
         IORuntime.createWorkStealingComputeThreadPool(
           threadPrefix = s"io-compute-${getClass.getName}",
           blockerThreadPrefix = s"io-blocker-${getClass.getName}")

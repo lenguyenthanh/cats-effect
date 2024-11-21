@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,6 +66,27 @@ private final class JSArrayQueue[A] {
           i += 1
         }
         endIndex = buffer.length
+      }
+    }
+
+  @inline def foreach(f: A => Unit): Unit =
+    if (empty) ()
+    else if (startIndex < endIndex) { // consecutive in middle of buffer
+      var i = startIndex
+      while (i < endIndex) {
+        f(buffer(i))
+        i += 1
+      }
+    } else { // split across tail and init of buffer
+      var i = startIndex
+      while (i < buffer.length) {
+        f(buffer(i))
+        i += 1
+      }
+      i = 0
+      while (i < endIndex) {
+        f(buffer(i))
+        i += 1
       }
     }
 

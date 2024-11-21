@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ trait Generators1[F[_]] extends Serializable {
   // Generators of base cases, with no recursion
   protected def baseGen[A: Arbitrary: Cogen]: List[(String, Gen[F[A]])] = {
     // prevent unused implicit param warnings, the params need to stay because
-    // this method is overriden in subtraits
+    // this method is overridden in subtraits
     val _ = (implicitly[Arbitrary[A]], implicitly[Cogen[A]])
     Nil
   }
@@ -49,7 +49,7 @@ trait Generators1[F[_]] extends Serializable {
   protected def recursiveGen[A: Arbitrary: Cogen](
       deeper: GenK[F]): List[(String, Gen[F[A]])] = {
     // prevent unused params warnings, the params need to stay because
-    // this method is overriden in subtraits
+    // this method is overridden in subtraits
     val _ = (deeper, implicitly[Arbitrary[A]], implicitly[Cogen[A]])
     Nil
   }

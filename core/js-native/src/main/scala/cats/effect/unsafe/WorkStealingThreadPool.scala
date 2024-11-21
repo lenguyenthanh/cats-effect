@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,27 +23,28 @@ import scala.concurrent.duration.FiniteDuration
 // Can you imagine a thread pool on JS? Have fun trying to extend or instantiate
 // this class. Unfortunately, due to the explicit branching, this type leaks
 // into the shared source code of IOFiber.scala.
-private[effect] sealed abstract class WorkStealingThreadPool private ()
+private[effect] sealed abstract class WorkStealingThreadPool[P] private ()
     extends ExecutionContext {
   def execute(runnable: Runnable): Unit
   def reportFailure(cause: Throwable): Unit
   private[effect] def reschedule(runnable: Runnable): Unit
   private[effect] def sleepInternal(
       delay: FiniteDuration,
-      callback: Right[Nothing, Unit] => Unit): Runnable
+      callback: Right[Nothing, Unit] => Unit): Function0[Unit] with Runnable
   private[effect] def sleep(
       delay: FiniteDuration,
       task: Runnable,
       fallback: Scheduler): Runnable
   private[effect] def canExecuteBlockingCode(): Boolean
+  private[effect] def prepareForBlocking(): Unit
   private[unsafe] def liveTraces(): (
       Map[Runnable, Trace],
-      Map[WorkerThread, (Thread.State, Option[(Runnable, Trace)], Map[Runnable, Trace])],
+      Map[WorkerThread[P], (Thread.State, Option[(Runnable, Trace)], Map[Runnable, Trace])],
       Map[Runnable, Trace])
 }
 
-private[unsafe] sealed abstract class WorkerThread private () extends Thread {
-  private[unsafe] def isOwnedBy(threadPool: WorkStealingThreadPool): Boolean
+private[unsafe] sealed abstract class WorkerThread[P] private () extends Thread {
+  private[unsafe] def isOwnedBy(threadPool: WorkStealingThreadPool[_]): Boolean
   private[unsafe] def monitor(fiber: Runnable): WeakBag.Handle
   private[unsafe] def index: Int
 }

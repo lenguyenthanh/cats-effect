@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,10 +22,12 @@ import cats.{
   Applicative,
   CommutativeApplicative,
   Eval,
+  Foldable,
   Functor,
   Id,
   Monad,
   Monoid,
+  NonEmptyParallel,
   Now,
   Parallel,
   Semigroup,
@@ -38,24 +40,30 @@ import cats.data.Ior
 import cats.effect.instances.spawn
 import cats.effect.kernel.CancelScope
 import cats.effect.kernel.GenTemporal.handleDuration
-import cats.effect.std.{Backpressure, Console, Env, SecureRandom, Supervisor, UUIDGen}
+import cats.effect.std.{
+  Backpressure,
+  Console,
+  Env,
+  SecureRandom,
+  Supervisor,
+  SystemProperties,
+  UUIDGen
+}
 import cats.effect.tracing.{Tracing, TracingEvent}
+import cats.effect.unsafe.IORuntime
+import cats.syntax._
 import cats.syntax.all._
 
 import scala.annotation.unchecked.uncheckedVariance
-import scala.concurrent.{
-  CancellationException,
-  ExecutionContext,
-  Future,
-  Promise,
-  TimeoutException
-}
+import scala.concurrent._
 import scala.concurrent.duration._
 import scala.util.{Failure, Success, Try}
 import scala.util.control.NonFatal
 
 import java.util.UUID
 import java.util.concurrent.Executor
+
+import Platform.static
 
 /**
  * A pure abstraction representing the intention to perform a side effect, where the result of
@@ -161,6 +169,15 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
     both(that).map { case (a, _) => a }
 
   /**
+   * Transform certain errors using `pf` and rethrow them. Non matching errors and successful
+   * values are not affected by this function.
+   *
+   * Implements `ApplicativeError.adaptError`.
+   */
+  def adaptError[E](pf: PartialFunction[Throwable, Throwable]): IO[A] =
+    recoverWith(pf.andThen(IO.raiseError[A] _))
+
+  /**
    * Replaces the result of this IO with the given value.
    */
   def as[B](b: B): IO[B] =
@@ -183,6 +200,15 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
    */
   def attempt: IO[Either[Throwable, A]] =
     IO.Attempt(this)
+
+  /**
+   * Reifies the value or error of the source and performs an effect on the result, then
+   * recovers the original value or error back into `IO`.
+   *
+   * Implements `MonadError.attemptTap`.
+   */
+  def attemptTap[B](f: Either[Throwable, A] => IO[B]): IO[A] =
+    attempt.flatTap(f).rethrow
 
   /**
    * Replaces failures in this IO with an empty Option.
@@ -358,10 +384,26 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
    */
   def evalOn(ec: ExecutionContext): IO[A] = IO.EvalOn(this, ec)
 
+  /**
+   * Shifts the execution of the current IO to the specified [[java.util.concurrent.Executor]].
+   *
+   * @see
+   *   [[evalOn]]
+   */
+  def evalOnExecutor(executor: Executor): IO[A] =
+    IO.asyncForIO.evalOnExecutor(this, executor)
+
   def startOn(ec: ExecutionContext): IO[FiberIO[A @uncheckedVariance]] = start.evalOn(ec)
+
+  def startOnExecutor(executor: Executor): IO[FiberIO[A @uncheckedVariance]] =
+    IO.asyncForIO.startOnExecutor(this, executor)
 
   def backgroundOn(ec: ExecutionContext): ResourceIO[IO[OutcomeIO[A @uncheckedVariance]]] =
     Resource.make(startOn(ec))(_.cancel).map(_.join)
+
+  def backgroundOnExecutor(
+      executor: Executor): ResourceIO[IO[OutcomeIO[A @uncheckedVariance]]] =
+    IO.asyncForIO.backgroundOnExecutor(this, executor)
 
   /**
    * Given an effect which might be [[uncancelable]] and a finalizer, produce an effect which
@@ -455,11 +497,8 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
   def guarantee(finalizer: IO[Unit]): IO[A] =
     // this is a little faster than the default implementation, which helps Resource
     IO uncancelable { poll =>
-      val handled = finalizer handleErrorWith { t =>
-        IO.executionContext.flatMap(ec => IO(ec.reportFailure(t)))
-      }
-
-      poll(this).onCancel(finalizer).onError(_ => handled).flatTap(_ => finalizer)
+      val onError: PartialFunction[Throwable, IO[Unit]] = { case _ => finalizer.reportError }
+      poll(this).onCancel(finalizer).onError(onError).flatTap(_ => finalizer)
     }
 
   /**
@@ -485,12 +524,10 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
   def guaranteeCase(finalizer: OutcomeIO[A @uncheckedVariance] => IO[Unit]): IO[A] =
     IO.uncancelable { poll =>
       val finalized = poll(this).onCancel(finalizer(Outcome.canceled))
-      val handled = finalized.onError { e =>
-        finalizer(Outcome.errored(e)).handleErrorWith { t =>
-          IO.executionContext.flatMap(ec => IO(ec.reportFailure(t)))
-        }
+      val onError: PartialFunction[Throwable, IO[Unit]] = {
+        case e => finalizer(Outcome.errored(e)).reportError
       }
-      handled.flatTap(a => finalizer(Outcome.succeeded(IO.pure(a))))
+      finalized.onError(onError).flatTap { (a: A) => finalizer(Outcome.succeeded(IO.pure(a))) }
     }
 
   def handleError[B >: A](f: Throwable => B): IO[B] =
@@ -554,8 +591,50 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
   def onCancel(fin: IO[Unit]): IO[A] =
     IO.OnCancel(this, fin)
 
-  def onError(f: Throwable => IO[Unit]): IO[A] =
-    handleErrorWith(t => f(t).voidError *> IO.raiseError(t))
+  @deprecated("Use onError with PartialFunction argument", "3.6.0")
+  def onError(f: Throwable => IO[Unit]): IO[A] = {
+    val pf: PartialFunction[Throwable, IO[Unit]] = { case t => f(t).reportError }
+    onError(pf)
+  }
+
+  /**
+   * Execute a callback on certain errors, then rethrow them. Any non matching error is rethrown
+   * as well.
+   *
+   * Implements `ApplicativeError.onError`.
+   */
+  def onError(pf: PartialFunction[Throwable, IO[Unit]]): IO[A] =
+    handleErrorWith(t => pf.applyOrElse(t, (_: Throwable) => IO.unit) *> IO.raiseError(t))
+
+  /**
+   * Like `Parallel.parProductL`
+   */
+  def parProductL[B](iob: IO[B])(implicit P: NonEmptyParallel[IO]): IO[A] =
+    P.parProductL[A, B](this)(iob)
+
+  /**
+   * Like `Parallel.parProductR`
+   */
+  def parProductR[B](iob: IO[B])(implicit P: NonEmptyParallel[IO]): IO[B] =
+    P.parProductR[A, B](this)(iob)
+
+  /**
+   * Like `Parallel.parProduct`
+   */
+  def parProduct[B](iob: IO[B])(implicit P: NonEmptyParallel[IO]): IO[(A, B)] =
+    Parallel.parProduct(this, iob)(P)
+
+  /**
+   * Like `Parallel.parReplicateA`
+   */
+  def parReplicateA(n: Int): IO[List[A]] =
+    List.fill(n)(this).parSequence
+
+  /**
+   * Like `Parallel.parReplicateA_`
+   */
+  def parReplicateA_(n: Int): IO[Unit] =
+    List.fill(n)(this).parSequence_
 
   def race[B](that: IO[B]): IO[Either[A, B]] =
     IO.race(this, that)
@@ -652,7 +731,6 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
     else
       flatMap(a => replicateA(n - 1).map(a :: _))
 
-  // TODO PR to cats
   def replicateA_(n: Int): IO[Unit] =
     if (n <= 0)
       IO.unit
@@ -716,17 +794,27 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
     andWait(duration: Duration)
 
   /**
-   * Returns an IO that either completes with the result of the source within the specified time
-   * `duration` or otherwise raises a `TimeoutException`.
+   * Returns an IO that either completes with the result of the source or otherwise raises a
+   * `TimeoutException`.
    *
-   * The source is canceled in the event that it takes longer than the specified time duration
-   * to complete. Once the source has been successfully canceled (and has completed its
-   * finalizers), the `TimeoutException` will be raised. If the source is uncancelable, the
-   * resulting effect will wait for it to complete before raising the exception.
+   * The source is raced against the timeout `duration`, and its cancelation is triggered if the
+   * source doesn't complete within the specified time. The resulting effect will always wait
+   * for the source effect to complete (and to complete its finalizers), and will return the
+   * source's outcome over raising a `TimeoutException`.
+   *
+   * In case source and timeout complete simultaneously, the result of the source will be
+   * returned over raising a `TimeoutException`.
+   *
+   * If the source effect is uncancelable, a `TimeoutException` will never be raised.
    *
    * @param duration
-   *   is the time span for which we wait for the source to complete; in the event that the
-   *   specified time has passed without the source completing, a `TimeoutException` is raised
+   *   is the time span for which we wait for the source to complete before triggering its
+   *   cancelation; in the event that the specified time has passed without the source
+   *   completing, a `TimeoutException` is raised
+   *
+   * @see
+   *   [[timeoutAndForget]] for a variant which does not wait for cancelation of the source
+   *   effect to complete.
    */
   def timeout[A2 >: A](duration: Duration): IO[A2] =
     handleDuration(duration, this) { finiteDuration =>
@@ -739,26 +827,35 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
     timeout(duration: Duration)
 
   /**
-   * Returns an IO that either completes with the result of the source within the specified time
-   * `duration` or otherwise evaluates the `fallback`.
+   * Returns an IO that either completes with the result of the source or otherwise evaluates
+   * the `fallback`.
    *
-   * The source is canceled in the event that it takes longer than the specified time duration
-   * to complete. Once the source has been successfully canceled (and has completed its
-   * finalizers), the fallback will be sequenced. If the source is uncancelable, the resulting
-   * effect will wait for it to complete before evaluating the fallback.
+   * The source is raised against the timeout `duration`, and its cancelation is triggered if
+   * the source doesn't complete within the specified time. The resulting effect will always
+   * wait for the source effect to complete (and to complete its finalizers), and will return
+   * the source's outcome over sequencing the `fallback`.
+   *
+   * In case source and timeout complete simultaneously, the result of the source will be
+   * returned over sequencing the `fallback`.
+   *
+   * If the source in uncancelable, `fallback` will never be evaluated.
    *
    * @param duration
-   *   is the time span for which we wait for the source to complete; in the event that the
-   *   specified time has passed without the source completing, the `fallback` gets evaluated
+   *   is the time span for which we wait for the source to complete before triggering its
+   *   cancelation; in the event that the specified time has passed without the source
+   *   completing, the `fallback` gets evaluated
    *
    * @param fallback
    *   is the task evaluated after the duration has passed and the source canceled
    */
   def timeoutTo[A2 >: A](duration: Duration, fallback: IO[A2]): IO[A2] = {
     handleDuration[IO[A2]](duration, this) { finiteDuration =>
-      race(IO.sleep(finiteDuration)).flatMap {
-        case Right(_) => fallback
-        case Left(value) => IO.pure(value)
+      IO.uncancelable { poll =>
+        poll(racePair(IO.sleep(finiteDuration))) flatMap {
+          case Left((oc, f)) => f.cancel *> oc.embed(poll(IO.canceled) *> IO.never)
+          case Right((f, _)) =>
+            f.cancel *> f.join.flatMap { oc => oc.fold(fallback, IO.raiseError, identity) }
+        }
       }
     }
   }
@@ -865,6 +962,19 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
   def void: IO[Unit] =
     map(_ => ())
 
+  /**
+   * Similar to [[IO.voidError]], but also reports the error.
+   */
+  private[effect] def reportError(implicit ev: A <:< Unit): IO[Unit] = {
+    val _ = ev
+    asInstanceOf[IO[Unit]].handleErrorWith { t =>
+      IO.executionContext.flatMap(ec => IO(ec.reportFailure(t)))
+    }
+  }
+
+  /**
+   * Discard any error raised by the source.
+   */
   def voidError(implicit ev: A <:< Unit): IO[Unit] = {
     val _ = ev
     asInstanceOf[IO[Unit]].handleError(_ => ())
@@ -1010,21 +1120,16 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
 
     val fiber = new IOFiber[A](
       Map.empty,
-      oc =>
+      { oc =>
+        if (registerCallback) {
+          runtime.fiberErrorCbs.remove(failure)
+        }
         oc.fold(
-          {
-            runtime.fiberErrorCbs.remove(failure)
-            canceled
-          },
-          { t =>
-            runtime.fiberErrorCbs.remove(failure)
-            failure(t)
-          },
-          { ioa =>
-            runtime.fiberErrorCbs.remove(failure)
-            success(ioa.asInstanceOf[IO.Pure[A]].value)
-          }
-        ),
+          canceled,
+          failure,
+          { ioa => success(ioa.asInstanceOf[IO.Pure[A]].value) }
+        )
+      },
       this,
       runtime.compute,
       runtime
@@ -1090,7 +1195,48 @@ private[effect] trait IOLowPriorityImplicits {
   }
 }
 
-object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
+object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TupleParallelSyntax {
+
+  implicit final def catsSyntaxParallelSequence1[T[_], A](
+      toia: T[IO[A]]): ParallelSequenceOps1[T, IO, A] = new ParallelSequenceOps1(toia)
+
+  implicit final def catsSyntaxParallelSequence_[T[_], A](
+      tioa: T[IO[A]]): ParallelSequence_Ops[T, IO, A] =
+    new ParallelSequence_Ops(tioa)
+
+  implicit final def catsSyntaxParallelUnorderedSequence[T[_], A](
+      tioa: T[IO[A]]): ParallelUnorderedSequenceOps[T, IO, A] =
+    new ParallelUnorderedSequenceOps(tioa)
+
+  implicit final def catsSyntaxParallelFlatSequence1[T[_], A](
+      tioa: T[IO[T[A]]]): ParallelFlatSequenceOps1[T, IO, A] =
+    new ParallelFlatSequenceOps1(tioa)
+
+  implicit final def catsSyntaxParallelUnorderedFlatSequence[T[_], A](
+      tiota: T[IO[T[A]]]): ParallelUnorderedFlatSequenceOps[T, IO, A] =
+    new ParallelUnorderedFlatSequenceOps(tiota)
+
+  implicit final def catsSyntaxParallelSequenceFilter[T[_], A](
+      x: T[IO[Option[A]]]): ParallelSequenceFilterOps[T, IO, A] =
+    new ParallelSequenceFilterOps(x)
+
+  implicit class IOFlatSequenceOps[T[_], A](tiota: T[IO[T[A]]]) {
+    def flatSequence(
+        implicit T: Traverse[T],
+        G: Applicative[IO],
+        F: cats.FlatMap[T]): IO[T[A]] = {
+      tiota.sequence(T, G).map(F.flatten)
+    }
+  }
+
+  implicit class IOSequenceOps[T[_], A](tioa: T[IO[A]]) {
+    def sequence(implicit T: Traverse[T], G: Applicative[IO]): IO[T[A]] = T.sequence(tioa)(G)
+
+    def sequence_(implicit F: Foldable[T], G: Applicative[IO]): IO[Unit] = F.sequence_(tioa)(G)
+  }
+
+  @static private[this] val _alignForIO = new IOAlign
+  @static private[this] val _asyncForIO: kernel.Async[IO] = new IOAsync
 
   /**
    * Newtype encoding for an `IO` datatype that has a `cats.Applicative` capable of doing
@@ -1130,7 +1276,7 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
    * Any exceptions thrown by the effect will be caught and sequenced into the `IO`.
    */
   def delay[A](thunk: => A): IO[A] = {
-    val fn = Thunk.asFunction0(thunk)
+    val fn = () => thunk
     Delay(fn, Tracing.calculateTracingEvent(fn))
   }
 
@@ -1206,7 +1352,7 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
           lift(k(resume)) flatMap {
             case Right(a) => G.pure(a)
             case Left(Some(fin)) => G.onCancel(poll(get), lift(fin))
-            case Left(None) => poll(get)
+            case Left(None) => get
           }
         }
       }
@@ -1250,7 +1396,12 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
    * }
    * }}}
    *
-   * Note that `async` is uncancelable during its registration.
+   * @note
+   *   `async` is always uncancelable during its registration. The created effect will be
+   *   uncancelable during its execution if the registration callback provides no finalizer
+   *   (i.e. evaluates to `None`). If you need the created task to be cancelable, return a
+   *   finalizer effect upon the registration. In a rare case when there's nothing to finalize,
+   *   you can return `Some(IO.unit)` for that.
    *
    * @see
    *   [[async_]] for a simplified variant without a finalizer
@@ -1303,7 +1454,9 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
    * This function can be thought of as a safer, lexically-constrained version of `Promise`,
    * where `IO` is like a safer, lazy version of `Future`.
    *
-   * Also, note that `async` is uncancelable during its registration.
+   * @note
+   *   `async_` is uncancelable during both its registration and execution. If you need an
+   *   asyncronous effect to be cancelable, consider using `async` instead.
    *
    * @see
    *   [[async]] for more generic version providing a finalizer
@@ -1321,6 +1474,24 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
     IOCont(body, Tracing.calculateTracingEvent(k))
   }
 
+  /**
+   * An effect that requests self-cancelation on the current fiber.
+   *
+   * `canceled` has a return type of `IO[Unit]` instead of `IO[Nothing]` due to execution
+   * continuing in a masked region. In the following example, the fiber requests
+   * self-cancelation in a masked region, so cancelation is suppressed until the fiber is
+   * completely unmasked. `fa` will run but `fb` will not. If `canceled` had a return type of
+   * `IO[Nothing]`, then it would not be possible to continue execution to `fa` (there would be
+   * no `Nothing` value to pass to the `flatMap`).
+   *
+   * {{{
+   *
+   *   IO.uncancelable { _ =>
+   *     IO.canceled *> fa
+   *   } *> fb
+   *
+   * }}}
+   */
   def canceled: IO[Unit] = Canceled
 
   /**
@@ -1399,22 +1570,58 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
   def some[A](a: A): IO[Option[A]] = pure(Some(a))
 
   /**
+   * Like `Parallel.parTraverse`
+   */
+  def parTraverse[T[_]: Traverse, A, B](ta: T[A])(f: A => IO[B]): IO[T[B]] =
+    ta.parTraverse(f)
+
+  /**
+   * Like `Parallel.parTraverse_`
+   */
+  def parTraverse_[T[_]: Foldable, A, B](ta: T[A])(f: A => IO[B]): IO[Unit] =
+    ta.parTraverse_(f)
+
+  /**
    * Like `Parallel.parTraverse`, but limits the degree of parallelism.
    */
   def parTraverseN[T[_]: Traverse, A, B](n: Int)(ta: T[A])(f: A => IO[B]): IO[T[B]] =
     _asyncForIO.parTraverseN(n)(ta)(f)
 
   /**
+   * Like `Parallel.parTraverse_`, but limits the degree of parallelism.
+   */
+  def parTraverseN_[T[_]: Foldable, A, B](n: Int)(ta: T[A])(f: A => IO[B]): IO[Unit] =
+    _asyncForIO.parTraverseN_(n)(ta)(f)
+
+  /**
+   * Like `Parallel.parSequence`
+   */
+  def parSequence[T[_]: Traverse, A](tioa: T[IO[A]]): IO[T[A]] =
+    tioa.parSequence
+
+  /**
+   * Like `Parallel.parSequence_`
+   */
+  def parSequence_[T[_]: Foldable, A](tioa: T[IO[A]]): IO[Unit] =
+    tioa.parSequence_
+
+  /**
    * Like `Parallel.parSequence`, but limits the degree of parallelism.
    */
-  def parSequenceN[T[_]: Traverse, A](n: Int)(tma: T[IO[A]]): IO[T[A]] =
-    _asyncForIO.parSequenceN(n)(tma)
+  def parSequenceN[T[_]: Traverse, A](n: Int)(tioa: T[IO[A]]): IO[T[A]] =
+    _asyncForIO.parSequenceN(n)(tioa)
+
+  /**
+   * Like `Parallel.parSequence_`, but limits the degree of parallelism.
+   */
+  def parSequenceN_[T[_]: Foldable, A](n: Int)(tma: T[IO[A]]): IO[Unit] =
+    _asyncForIO.parSequenceN_(n)(tma)
 
   /**
    * Like `Parallel.parReplicateA`, but limits the degree of parallelism.
    */
-  def parReplicateAN[A](n: Int)(replicas: Int, ma: IO[A]): IO[List[A]] =
-    _asyncForIO.parReplicateAN(n)(replicas, ma)
+  def parReplicateAN[A](n: Int)(replicas: Int, ioa: IO[A]): IO[List[A]] =
+    _asyncForIO.parReplicateAN(n)(replicas, ioa)
 
   /**
    * Lifts a pure value into `IO`.
@@ -1484,6 +1691,17 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
 
   def trace: IO[Trace] =
     IOTrace
+
+  def traverse[T[_]: Traverse, A, B](ta: T[A])(f: A => IO[B]): IO[T[B]] =
+    ta.traverse(f)(_asyncForIO)
+
+  def traverse_[T[_]: Foldable, A, B](ta: T[A])(f: A => IO[B]): IO[Unit] =
+    ta.traverse_(f)(_asyncForIO)
+
+  private[effect] def runtime: IO[IORuntime] = ReadRT
+
+  def pollers: IO[List[Any]] =
+    IO.runtime.map(_.pollers)
 
   def uncancelable[A](body: Poll[IO] => IO[A]): IO[A] =
     Uncancelable(body, Tracing.calculateTracingEvent(body))
@@ -1620,7 +1838,7 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
    *   [[IO.raiseWhen]] for conditionally raising an error
    */
   def whenA(cond: Boolean)(action: => IO[Unit]): IO[Unit] =
-    Applicative[IO].whenA(cond)(action)
+    if (cond) action else IO.unit
 
   /**
    * Returns the given argument if `cond` is false, otherwise `IO.Unit`
@@ -1631,7 +1849,7 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
    *   [[IO.raiseWhen]] for conditionally raising an error
    */
   def unlessA(cond: Boolean)(action: => IO[Unit]): IO[Unit] =
-    Applicative[IO].unlessA(cond)(action)
+    whenA(!cond)(action)
 
   /**
    * Returns `raiseError` when the `cond` is true, otherwise `IO.unit`
@@ -1753,7 +1971,7 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
 
   implicit def alignForIO: Align[IO] = _alignForIO
 
-  private[this] val _alignForIO = new Align[IO] {
+  private[this] final class IOAlign extends Align[IO] {
     def align[A, B](fa: IO[A], fb: IO[B]): IO[Ior[A, B]] =
       alignWith(fa, fb)(identity)
 
@@ -1766,8 +1984,7 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
     def functor: Functor[IO] = Functor[IO]
   }
 
-  private[this] val _asyncForIO: kernel.Async[IO] = new kernel.Async[IO]
-    with StackSafeMonad[IO] {
+  private[this] final class IOAsync extends kernel.Async[IO] with StackSafeMonad[IO] {
 
     override def asyncCheckAttempt[A](
         k: (Either[Throwable, A] => Unit) => IO[Either[Option[IO[Unit]], A]]): IO[A] =
@@ -1791,6 +2008,9 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
     def pure[A](x: A): IO[A] =
       IO.pure(x)
 
+    override def unit: IO[Unit] =
+      IO.unit
+
     override def guarantee[A](fa: IO[A], fin: IO[Unit]): IO[A] =
       fa.guarantee(fin)
 
@@ -1799,6 +2019,9 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
 
     override def handleError[A](fa: IO[A])(f: Throwable => A): IO[A] =
       fa.handleError(f)
+
+    override def onError[A](fa: IO[A])(pf: PartialFunction[Throwable, IO[Unit]]): IO[A] =
+      fa.onError(pf)
 
     override def timeout[A](fa: IO[A], duration: FiniteDuration)(
         implicit ev: TimeoutException <:< Throwable): IO[A] = {
@@ -1958,6 +2181,8 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
 
   implicit val envForIO: Env[IO] = Env.make
 
+  implicit val systemPropertiesForIO: SystemProperties[IO] = SystemProperties.make
+
   // This is cached as a val to save allocations, but it uses ops from the Async
   // instance which is also cached as a val, and therefore needs to appear
   // later in the file
@@ -2088,6 +2313,10 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits {
 
   private[effect] case object IOTrace extends IO[Trace] {
     def tag = 23
+  }
+
+  private[effect] case object ReadRT extends IO[IORuntime] {
+    def tag = 24
   }
 
   // INTERNAL, only created by the runloop itself as the terminal state of several operations

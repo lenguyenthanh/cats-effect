@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,11 +18,11 @@ package cats.effect
 
 class ThunkSpec extends BaseSpec {
 
-  "Thunk.asFunction0" should {
+  "IO.delay" should {
     "return the same function" in {
       var i = 0
       val f = () => i += 1
-      Thunk.asFunction0(f()) eq f
+      IO.delay(f()).asInstanceOf[IO.Delay[Unit]].thunk eq f
     }
   }
 

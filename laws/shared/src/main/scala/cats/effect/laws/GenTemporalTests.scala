@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import cats.laws.discipline.SemigroupalTests.Isomorphisms
 import org.scalacheck._
 import org.scalacheck.Prop.forAll
 import org.scalacheck.util.Pretty
+import org.typelevel.discipline.Laws
 
 import scala.concurrent.duration.FiniteDuration
 
@@ -84,7 +85,7 @@ trait GenTemporalTests[F[_], E] extends GenSpawnTests[F, E] with ClockTests[F] {
 
     new RuleSet {
       val name = "temporal"
-      val bases = Nil
+      val bases: Seq[(String, Laws#RuleSet)] = Nil
       val parents = Seq(
         spawn[A, B, C](
           implicitly[Arbitrary[A]],
@@ -177,7 +178,7 @@ trait GenTemporalTests[F[_], E] extends GenSpawnTests[F, E] with ClockTests[F] {
 
     new RuleSet {
       val name = "temporal"
-      val bases = Nil
+      val bases: Seq[(String, Laws#RuleSet)] = Nil
       val parents = Seq(
         spawn[A, B, C](
           implicitly[Arbitrary[A]],

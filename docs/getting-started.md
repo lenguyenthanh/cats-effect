@@ -6,13 +6,19 @@ title: Getting Started
 Add the following to your **build.sbt**:
 
 ```scala
-libraryDependencies += "org.typelevel" %% "cats-effect" % "3.4.11"
+libraryDependencies += "org.typelevel" %% "cats-effect" % "3.5.6"
 ```
 
 Naturally, if you're using ScalaJS, you should replace the double `%%` with a triple `%%%`. If you're on Scala 2, it is *highly* recommended that you enable the [better-monadic-for](https://github.com/oleg-py/better-monadic-for) plugin, which fixes a number of surprising elements of the `for`-comprehension syntax in the Scala language:
 
 ```scala
 addCompilerPlugin("com.olegpy" %% "better-monadic-for" % "0.3.1")
+```
+
+It is recommended to enable warnings for non-unit statements (see [FAQ](./faq.md#what-do-non-unit-statement-warnings-mean)):
+
+```scala
+scalacOptions += "-Wnonunit-statement"
 ```
 
 Alternatively, you can use the Cats Effect 3 Giter8 template, which sets up some basic project infrastructure:
@@ -62,7 +68,7 @@ We will learn more about constructs like `start` and `*>` in later pages, but fo
 Of course, the easiest way to play with Cats Effect is to try it out in a Scala REPL. We recommend using [Ammonite](https://ammonite.io/#Ammonite-REPL) for this kind of thing. To get started, run the following lines (if not using Ammonite, skip the first line and make sure that Cats Effect and its dependencies are correctly configured on the classpath):
 
 ```scala
-import $ivy.`org.typelevel::cats-effect:3.4.11`
+import $ivy.`org.typelevel::cats-effect:3.5.6`
 
 import cats.effect.unsafe.implicits._
 import cats.effect.IO

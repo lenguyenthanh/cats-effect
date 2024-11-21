@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import cats.laws.discipline.SemigroupalTests.Isomorphisms
 import org.scalacheck._
 import org.scalacheck.Prop.forAll
 import org.scalacheck.util.Pretty
+import org.typelevel.discipline.Laws
 
 trait MonadCancelTests[F[_], E] extends MonadErrorTests[F, E] {
 
@@ -111,7 +112,7 @@ trait MonadCancelTests[F[_], E] extends MonadErrorTests[F, E] {
 
     new RuleSet {
       val name = "monadCancel"
-      val bases = Nil
+      val bases: Seq[(String, Laws#RuleSet)] = Nil
       val parents = Seq(monadError[A, B, C])
 
       val props = {

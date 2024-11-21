@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -158,7 +158,7 @@ object Dequeue {
           state.modify {
             case State(queue, size, takers, offerers) if takers.nonEmpty =>
               val (taker, rest) = takers.dequeue
-              State(update(queue), size, rest, offerers) -> taker.complete(()).void
+              State(update(queue), size + 1, rest, offerers) -> taker.complete(()).void
 
             case State(queue, size, takers, offerers) if size < capacity =>
               State(update(queue), size + 1, takers, offerers) -> F.unit
@@ -187,7 +187,7 @@ object Dequeue {
       state.flatModify {
         case State(queue, size, takers, offerers) if takers.nonEmpty =>
           val (taker, rest) = takers.dequeue
-          State(update(queue), size, rest, offerers) -> taker.complete(()).as(true)
+          State(update(queue), size + 1, rest, offerers) -> taker.complete(()).as(true)
 
         case State(queue, size, takers, offerers) if size < capacity =>
           State(update(queue), size + 1, takers, offerers) -> F.pure(true)

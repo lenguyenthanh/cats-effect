@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -114,6 +114,22 @@ class QueueBenchmark {
   @Benchmark
   def unboundedAsyncEnqueueDequeueContended(): Unit =
     Queue.unboundedForAsync[IO, Unit].flatMap(enqueueDequeueContended(_)).unsafeRunSync()
+
+  @Benchmark
+  def droppingConcurrentEnqueueDequeueOne(): Unit =
+    Queue.droppingForConcurrent[IO, Unit](size).flatMap(enqueueDequeueOne(_)).unsafeRunSync()
+
+  @Benchmark
+  def droppingConcurrentEnqueueDequeueMany(): Unit =
+    Queue.droppingForConcurrent[IO, Unit](size).flatMap(enqueueDequeueMany(_)).unsafeRunSync()
+
+  @Benchmark
+  def droppingAsyncEnqueueDequeueOne(): Unit =
+    Queue.droppingForAsync[IO, Unit](size).flatMap(enqueueDequeueOne(_)).unsafeRunSync()
+
+  @Benchmark
+  def droppingAsyncEnqueueDequeueMany(): Unit =
+    Queue.droppingForAsync[IO, Unit](size).flatMap(enqueueDequeueMany(_)).unsafeRunSync()
 
   private[this] def enqueueDequeueOne(q: Queue[IO, Unit]): IO[Unit] = {
     def loop(i: Int): IO[Unit] =

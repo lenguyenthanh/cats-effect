@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -165,12 +165,14 @@ class WorkStealingBenchmark {
       (ExecutionContext.fromExecutor(executor), () => executor.shutdown())
     }
 
-    val compute = new WorkStealingThreadPool(
+    val compute = new WorkStealingThreadPool[AnyRef](
       256,
       "io-compute",
       "io-blocker",
       60.seconds,
       false,
+      1.second,
+      SleepSystem,
       _.printStackTrace())
 
     val cancelationCheckThreshold =

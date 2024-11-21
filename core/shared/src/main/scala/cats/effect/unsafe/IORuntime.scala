@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 package cats.effect
 package unsafe
+
+import cats.effect.Platform.static
 
 import scala.concurrent.ExecutionContext
 
@@ -38,6 +40,7 @@ final class IORuntime private[unsafe] (
     val compute: ExecutionContext,
     private[effect] val blocking: ExecutionContext,
     val scheduler: Scheduler,
+    private[effect] val pollers: List[Any],
     private[effect] val fiberMonitor: FiberMonitor,
     val shutdown: () => Unit,
     val config: IORuntimeConfig
@@ -57,34 +60,62 @@ final class IORuntime private[unsafe] (
 }
 
 object IORuntime extends IORuntimeCompanionPlatform {
+
+  def apply(
+      compute: ExecutionContext,
+      blocking: ExecutionContext,
+      scheduler: Scheduler,
+      pollers: List[Any],
+      shutdown: () => Unit,
+      config: IORuntimeConfig): IORuntime = {
+    val fiberMonitor = FiberMonitor(compute)
+    val unregister = registerFiberMonitorMBean(fiberMonitor)
+    def unregisterAndShutdown: () => Unit = () => {
+      unregister()
+      shutdown()
+      allRuntimes.remove(runtime, runtime.hashCode())
+    }
+
+    lazy val runtime =
+      new IORuntime(
+        compute,
+        blocking,
+        scheduler,
+        pollers,
+        fiberMonitor,
+        unregisterAndShutdown,
+        config)
+    allRuntimes.put(runtime, runtime.hashCode())
+    runtime
+  }
+
   def apply(
       compute: ExecutionContext,
       blocking: ExecutionContext,
       scheduler: Scheduler,
       shutdown: () => Unit,
-      config: IORuntimeConfig): IORuntime = {
-    val fiberMonitor = FiberMonitor(compute)
-    val unregister = registerFiberMonitorMBean(fiberMonitor)
-    val unregisterAndShutdown = () => {
-      unregister()
-      shutdown()
-    }
+      config: IORuntimeConfig): IORuntime =
+    apply(compute, blocking, scheduler, Nil, shutdown, config)
 
-    val runtime =
-      new IORuntime(compute, blocking, scheduler, fiberMonitor, unregisterAndShutdown, config)
-    allRuntimes.put(runtime, runtime.hashCode())
-    runtime
-  }
+  @deprecated("Preserved for bincompat", "3.6.0")
+  private[unsafe] def apply(
+      compute: ExecutionContext,
+      blocking: ExecutionContext,
+      scheduler: Scheduler,
+      fiberMonitor: FiberMonitor,
+      shutdown: () => Unit,
+      config: IORuntimeConfig): IORuntime =
+    new IORuntime(compute, blocking, scheduler, Nil, fiberMonitor, shutdown, config)
 
   def builder(): IORuntimeBuilder =
     IORuntimeBuilder()
 
   private[effect] def testRuntime(ec: ExecutionContext, scheduler: Scheduler): IORuntime =
-    new IORuntime(ec, ec, scheduler, new NoOpFiberMonitor(), () => (), IORuntimeConfig())
+    new IORuntime(ec, ec, scheduler, Nil, new NoOpFiberMonitor(), () => (), IORuntimeConfig())
 
-  private[effect] final val allRuntimes: ThreadSafeHashtable[IORuntime] =
+  @static private[effect] final val allRuntimes: ThreadSafeHashtable[IORuntime] =
     new ThreadSafeHashtable(4)
 
-  private[effect] final val globalFatalFailureHandled: AtomicBoolean =
+  @static private[effect] final val globalFatalFailureHandled: AtomicBoolean =
     new AtomicBoolean(false)
 }

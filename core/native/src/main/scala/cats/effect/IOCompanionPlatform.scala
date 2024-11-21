@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -62,4 +62,5 @@ private[effect] abstract class IOCompanionPlatform { this: IO.type =>
    */
   def readLine: IO[String] =
     Console[IO].readLine
+
 }

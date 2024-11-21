@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -131,7 +131,7 @@ import cats.syntax.all._
  *
  * {{{
  *
- *   // Starts a fiber that continously prints "A".
+ *   // Starts a fiber that continuously prints "A".
  *   // After 10 seconds, the resource scope exits so the fiber is canceled.
  *   F.background(F.delay(println("A")).foreverM).use { _ =>
  *     F.sleep(10.seconds)
@@ -202,7 +202,7 @@ trait GenSpawn[F[_], E] extends MonadCancel[F, E] with Unique[F] {
    *
    * {{{
    *
-   *   // Starts a fiber that continously prints "A".
+   *   // Starts a fiber that continuously prints "A".
    *   // After 10 seconds, the resource scope exits so the fiber is canceled.
    *   F.background(F.delay(println("A")).foreverM).use { _ =>
    *     F.sleep(10.seconds)
@@ -264,7 +264,9 @@ trait GenSpawn[F[_], E] extends MonadCancel[F, E] with Unique[F] {
   def cancelable[A](fa: F[A], fin: F[Unit]): F[A] =
     uncancelable { poll =>
       start(fa) flatMap { fiber =>
-        poll(fiber.join).onCancel(fin *> fiber.cancel).flatMap(_.embed(poll(canceled *> never)))
+        poll(fiber.join)
+          .onCancel(fin.guarantee(fiber.cancel))
+          .flatMap(_.embed(poll(canceled *> never)))
       }
     }
 

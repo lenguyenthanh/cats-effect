@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,7 +40,7 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
       blockerThreadPrefix: String,
       runtimeBlockingExpiration: Duration,
       reportFailure: Throwable => Unit
-  ): (WorkStealingThreadPool, () => Unit) = createWorkStealingComputeThreadPool(
+  ): (WorkStealingThreadPool[_], () => Unit) = createWorkStealingComputeThreadPool(
     threads,
     threadPrefix,
     blockerThreadPrefix,
@@ -49,6 +49,27 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
     false
   )
 
+  @deprecated("Preserved for binary-compatibility", "3.6.0")
+  def createWorkStealingComputeThreadPool(
+      threads: Int,
+      threadPrefix: String,
+      blockerThreadPrefix: String,
+      runtimeBlockingExpiration: Duration,
+      reportFailure: Throwable => Unit,
+      blockedThreadDetectionEnabled: Boolean
+  ): (WorkStealingThreadPool[_], () => Unit) = {
+    val (pool, _, shutdown) = createWorkStealingComputeThreadPool(
+      threads,
+      threadPrefix,
+      blockerThreadPrefix,
+      runtimeBlockingExpiration,
+      reportFailure,
+      false,
+      1.second,
+      SleepSystem
+    )
+    (pool, shutdown)
+  }
   // The default compute thread pool on the JVM is now a work stealing thread pool.
   def createWorkStealingComputeThreadPool(
       threads: Int = Math.max(2, Runtime.getRuntime().availableProcessors()),
@@ -56,15 +77,21 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
       blockerThreadPrefix: String = DefaultBlockerPrefix,
       runtimeBlockingExpiration: Duration = 60.seconds,
       reportFailure: Throwable => Unit = _.printStackTrace(),
-      blockedThreadDetectionEnabled: Boolean = false): (WorkStealingThreadPool, () => Unit) = {
+      blockedThreadDetectionEnabled: Boolean = false,
+      shutdownTimeout: Duration = 1.second,
+      pollingSystem: PollingSystem = SelectorSystem())
+      : (WorkStealingThreadPool[_], pollingSystem.Api, () => Unit) = {
     val threadPool =
-      new WorkStealingThreadPool(
+      new WorkStealingThreadPool[pollingSystem.Poller](
         threads,
         threadPrefix,
         blockerThreadPrefix,
         runtimeBlockingExpiration,
         blockedThreadDetectionEnabled && (threads > 1),
-        reportFailure)
+        shutdownTimeout,
+        pollingSystem,
+        reportFailure
+      )
 
     val unregisterMBeans =
       if (isStackTracing) {
@@ -125,6 +152,7 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
 
     (
       threadPool,
+      pollingSystem.makeApi(threadPool),
       { () =>
         unregisterMBeans()
         threadPool.shutdown()
@@ -140,18 +168,32 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
       threads: Int = Math.max(2, Runtime.getRuntime().availableProcessors()),
       threadPrefix: String = "io-compute",
       blockerThreadPrefix: String = DefaultBlockerPrefix)
-      : (WorkStealingThreadPool, () => Unit) =
-    createWorkStealingComputeThreadPool(threads, threadPrefix, blockerThreadPrefix)
+      : (WorkStealingThreadPool[_], () => Unit) =
+    createWorkStealingComputeThreadPool(
+      threads,
+      threadPrefix,
+      blockerThreadPrefix,
+      60.seconds,
+      _.printStackTrace(),
+      false
+    )
 
   @deprecated("bincompat shim for previous default method overload", "3.3.13")
   def createDefaultComputeThreadPool(
       self: () => IORuntime,
       threads: Int,
-      threadPrefix: String): (WorkStealingThreadPool, () => Unit) =
+      threadPrefix: String): (WorkStealingThreadPool[_], () => Unit) =
     createDefaultComputeThreadPool(self(), threads, threadPrefix)
 
   def createDefaultBlockingExecutionContext(
-      threadPrefix: String = "io-blocking"): (ExecutionContext, () => Unit) = {
+      threadPrefix: String = "io-blocking"
+  ): (ExecutionContext, () => Unit) =
+    createDefaultBlockingExecutionContext(threadPrefix, _.printStackTrace())
+
+  private[effect] def createDefaultBlockingExecutionContext(
+      threadPrefix: String,
+      reportFailure: Throwable => Unit
+  ): (ExecutionContext, () => Unit) = {
     val threadCount = new AtomicInteger(0)
     val executor = Executors.newCachedThreadPool { (r: Runnable) =>
       val t = new Thread(r)
@@ -159,7 +201,7 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
       t.setDaemon(true)
       t
     }
-    (ExecutionContext.fromExecutor(executor), { () => executor.shutdown() })
+    (ExecutionContext.fromExecutor(executor, reportFailure), { () => executor.shutdown() })
   }
 
   def createDefaultScheduler(threadPrefix: String = "io-scheduler"): (Scheduler, () => Unit) = {
@@ -175,6 +217,8 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
     scheduler.setRemoveOnCancelPolicy(true)
     (Scheduler.fromScheduledExecutor(scheduler), { () => scheduler.shutdown() })
   }
+
+  def createDefaultPollingSystem(): PollingSystem = SelectorSystem()
 
   @volatile private[this] var _global: IORuntime = null
 
@@ -195,11 +239,17 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
   def global: IORuntime = {
     if (_global == null) {
       installGlobal {
-        val (compute, _) = createWorkStealingComputeThreadPool()
-        val (blocking, _) = createDefaultBlockingExecutionContext()
+        val (compute, poller, computeDown) = createWorkStealingComputeThreadPool()
+        val (blocking, blockingDown) = createDefaultBlockingExecutionContext()
+        val shutdown = () => {
+          computeDown()
+          blockingDown()
+          resetGlobal()
+        }
 
-        IORuntime(compute, blocking, compute, () => resetGlobal(), IORuntimeConfig())
+        IORuntime(compute, blocking, compute, List(poller), shutdown, IORuntimeConfig())
       }
+      ()
     }
 
     _global

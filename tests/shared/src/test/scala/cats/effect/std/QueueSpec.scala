@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,6 +39,29 @@ class BoundedQueueSpec extends BaseSpec with QueueTests[Queue] with DetectPlatfo
 
   "BoundedQueue (async)" should {
     boundedQueueTests(Queue.bounded)
+  }
+
+  "BoundedQueue (unsafe)" should {
+    "permit tryOffer when empty" in real {
+      Queue.unsafeBounded[IO, Int](1024) flatMap { q =>
+        for {
+          attempt <- IO(q.unsafeTryOffer(42))
+          _ <- IO(attempt must beTrue)
+          i <- q.take
+          _ <- IO(i mustEqual 42)
+        } yield ok
+      }
+    }
+
+    "forbid tryOffer when full" in real {
+      Queue.unsafeBounded[IO, Int](8) flatMap { q =>
+        for {
+          _ <- 0.until(8).toList.traverse_(q.offer(_))
+          attempt <- IO(q.unsafeTryOffer(42))
+          _ <- IO(attempt must beFalse)
+        } yield ok
+      }
+    }
   }
 
   "BoundedQueue constructor" should {
@@ -278,7 +301,11 @@ class BoundedQueueSpec extends BaseSpec with QueueTests[Queue] with DetectPlatfo
         q <- constructor(64)
 
         produce = 0.until(fiberCount).toList.parTraverse_(producer(q, _))
-        consume = 0.until(fiberCount).toList.parTraverse(consumer(q, _)).map(_.flatten)
+        consume = 0
+          .until(fiberCount)
+          .toList
+          .parTraverse(consumer(q, _))
+          .map(_.flatMap(identity))
 
         results <- produce &> consume
 
@@ -362,6 +389,18 @@ class UnboundedQueueSpec extends BaseSpec with QueueTests[Queue] {
     unboundedQueueTests(Queue.unboundedForAsync)
   }
 
+  "UnboundedQueue (unsafe)" should {
+    "pass a value from unsafeOffer to take" in real {
+      Queue.unsafeUnbounded[IO, Int] flatMap { q =>
+        for {
+          _ <- IO(q.unsafeOffer(42))
+          i <- q.take
+          _ <- IO(i mustEqual 42)
+        } yield ok
+      }
+    }
+  }
+
   "UnboundedQueue mapk" should {
     unboundedQueueTests(Queue.unbounded[IO, Int].map(_.mapK(FunctionK.id)))
   }
@@ -372,13 +411,18 @@ class UnboundedQueueSpec extends BaseSpec with QueueTests[Queue] {
     commonTests(_ => constructor, _.offer(_), _.tryOffer(_), _.take, _.tryTake, _.size)
     batchTakeTests(_ => constructor, _.offer(_), _.tryTakeN(_))
     batchOfferTests(_ => constructor, _.tryOfferN(_), _.tryTakeN(_))
+    cancelableTakeTests(_ => constructor, _.offer(_), _.take)
   }
 }
 
 class DroppingQueueSpec extends BaseSpec with QueueTests[Queue] {
   sequential
 
-  "DroppingQueue" should {
+  "DroppingQueue (concurrent)" should {
+    droppingQueueTests(i => if (i < 1) Queue.dropping(i) else Queue.droppingForConcurrent(i))
+  }
+
+  "DroppingQueue (async)" should {
     droppingQueueTests(Queue.dropping)
   }
 
@@ -963,6 +1007,20 @@ trait QueueTests[Q[_[_], _]] { self: BaseSpec =>
         v2 <- IO.fromFuture(IO.pure(f))
         r <- IO(v2 must beEqualTo(2))
       } yield r
+    }
+
+    "should return the queue size when take precedes offer" in ticked { implicit ticker =>
+      constructor(10).flatMap { q =>
+        take(q).background.use { took => IO.sleep(1.second) *> offer(q, 1) *> took *> size(q) }
+      } must completeAs(0)
+    }
+
+    "should return the queue size when take precedes tryOffer" in ticked { implicit ticker =>
+      constructor(10).flatMap { q =>
+        take(q).background.use { took =>
+          IO.sleep(1.second) *> tryOffer(q, 1) *> took *> size(q)
+        }
+      } must completeAs(0)
     }
   }
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import cats.laws.discipline.SemigroupalTests.Isomorphisms
 
 import org.scalacheck._
 import org.scalacheck.Prop.forAll
+import org.typelevel.discipline.Laws
 
 trait SyncTests[F[_]]
     extends MonadCancelTests[F, Throwable]
@@ -58,7 +59,7 @@ trait SyncTests[F[_]]
 
     new RuleSet {
       val name = "sync"
-      val bases = Nil
+      val bases: Seq[(String, Laws#RuleSet)] = Nil
       val parents = Seq(
         monadCancel[A, B, C](
           implicitly[Arbitrary[A]],

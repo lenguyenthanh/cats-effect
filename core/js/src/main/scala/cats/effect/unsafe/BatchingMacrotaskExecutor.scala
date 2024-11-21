@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,13 +40,14 @@ import scala.util.control.NonFatal
 private[effect] final class BatchingMacrotaskExecutor(
     batchSize: Int,
     reportFailure0: Throwable => Unit
-) extends ExecutionContextExecutor {
+) extends ExecutionContextExecutor
+    with FiberExecutor {
 
   private[this] val queueMicrotask: js.Function1[js.Function0[Any], Any] =
     if (js.typeOf(js.Dynamic.global.queueMicrotask) == "function")
       js.Dynamic.global.queueMicrotask.asInstanceOf[js.Function1[js.Function0[Any], Any]]
     else {
-      val resolved = js.Dynamic.global.Promise.resolved(())
+      val resolved = js.Dynamic.global.Promise.resolve(())
       task => resolved.`then`(task)
     }
 
@@ -56,23 +57,17 @@ private[effect] final class BatchingMacrotaskExecutor(
   private[this] var needsReschedule = true
   private[this] val fibers = new JSArrayQueue[IOFiber[_]]
 
-  private[this] object executeBatchTaskRunnable extends Runnable {
+  private[this] val executeBatchTaskRunnable = new Runnable {
     def run() = {
       // do up to batchSize tasks
       var i = 0
       while (i < batchSize && !fibers.isEmpty()) {
         val fiber = fibers.take()
-
-        if (LinkingInfo.developmentMode)
-          if (fiberBag ne null)
-            fiberBag -= fiber
-
         try fiber.run()
         catch {
           case t if NonFatal(t) => reportFailure(t)
           case t: Throwable => IOFiber.onFatalFailure(t)
         }
-
         i += 1
       }
 
@@ -99,10 +94,6 @@ private[effect] final class BatchingMacrotaskExecutor(
    * batch.
    */
   def schedule(fiber: IOFiber[_]): Unit = {
-    if (LinkingInfo.developmentMode)
-      if (fiberBag ne null)
-        fiberBag += fiber
-
     fibers.offer(fiber)
 
     if (needsReschedule) {
@@ -116,8 +107,12 @@ private[effect] final class BatchingMacrotaskExecutor(
 
   def reportFailure(t: Throwable): Unit = reportFailure0(t)
 
-  def liveTraces(): Map[IOFiber[_], Trace] =
-    fiberBag.iterator.filterNot(_.isDone).map(f => f -> f.captureTrace()).toMap
+  def liveTraces(): Map[IOFiber[_], Trace] = {
+    val traces = Map.newBuilder[IOFiber[_], Trace]
+    fibers.foreach(f => if (!f.isDone) traces += f -> f.captureTrace())
+    fiberBag.foreach(f => if (!f.isDone) traces += f -> f.captureTrace())
+    traces.result()
+  }
 
   @inline private[this] def monitor(runnable: Runnable): Runnable =
     if (LinkingInfo.developmentMode)

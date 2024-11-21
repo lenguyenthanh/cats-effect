@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,12 +17,35 @@
 package cats.effect.unsafe
 
 import scala.concurrent.ExecutionContext
+import scala.scalanative.meta.LinktimeInfo
 
 private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type =>
 
-  def defaultComputeExecutionContext: ExecutionContext = QueueExecutorScheduler
+  def defaultComputeExecutionContext: ExecutionContext = EventLoopExecutorScheduler.global
 
-  def defaultScheduler: Scheduler = QueueExecutorScheduler
+  def defaultScheduler: Scheduler = EventLoopExecutorScheduler.global
+
+  def createEventLoop(
+      system: PollingSystem
+  ): (ExecutionContext with Scheduler, system.Api, () => Unit) = {
+    val loop = new EventLoopExecutorScheduler[system.Poller](64, system)
+    val poller = loop.poller
+    val api = system.makeApi(
+      new UnsealedPollingContext[system.Poller] {
+        def accessPoller(cb: system.Poller => Unit) = cb(poller)
+        def ownPoller(poller: system.Poller) = true
+      }
+    )
+    (loop, api, () => loop.shutdown())
+  }
+
+  def createDefaultPollingSystem(): PollingSystem =
+    if (LinktimeInfo.isLinux)
+      EpollSystem
+    else if (LinktimeInfo.isMac)
+      KqueueSystem
+    else
+      SleepSystem
 
   private[this] var _global: IORuntime = null
 
@@ -41,13 +64,19 @@ private[unsafe] abstract class IORuntimeCompanionPlatform { this: IORuntime.type
   def global: IORuntime = {
     if (_global == null) {
       installGlobal {
+        val (loop, poller, loopDown) = createEventLoop(createDefaultPollingSystem())
         IORuntime(
-          defaultComputeExecutionContext,
-          defaultComputeExecutionContext,
-          defaultScheduler,
-          () => resetGlobal(),
+          loop,
+          loop,
+          loop,
+          List(poller),
+          () => {
+            loopDown()
+            resetGlobal()
+          },
           IORuntimeConfig())
       }
+      ()
     }
 
     _global

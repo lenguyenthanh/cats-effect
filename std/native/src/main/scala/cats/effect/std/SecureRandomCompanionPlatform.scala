@@ -1,5 +1,5 @@
 /*
- * Copyright 2020-2023 Typelevel
+ * Copyright 2020-2024 Typelevel
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,8 @@ import cats.effect.std.Random.ScalaRandom
 
 import org.typelevel.scalaccompat.annotation._
 
-import scala.scalanative.libc.errno
+import scala.scalanative.libc.errno._
+import scala.scalanative.libc.string._
 import scala.scalanative.unsafe._
 import scala.scalanative.unsigned._
 
@@ -34,19 +35,12 @@ private[std] trait SecureRandomCompanionPlatform {
 
     override def nextBytes(bytes: Array[Byte]): Unit = {
       val len = bytes.length
-      val buffer = stackalloc[Byte](256)
       var i = 0
       while (i < len) {
         val n = Math.min(256, len - i)
-        if (sysrandom.getentropy(buffer, n.toULong) < 0)
-          throw new RuntimeException(s"getentropy: ${errno.errno}")
-
-        var j = 0L
-        while (j < n) {
-          bytes(i) = buffer(j)
-          i += 1
-          j += 1
-        }
+        if (sysrandom.getentropy(bytes.atUnsafe(i), n.toULong) < 0)
+          throw new RuntimeException(fromCString(strerror(errno)))
+        i += n
       }
     }
 
