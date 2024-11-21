@@ -231,7 +231,7 @@ In English, the semantics of this are as follows:
 
 - If the child fiber completed successfully, produce its result
 - If it errored, re-raise the error within the current fiber
-- If it canceled, attempt to self-cancel, and if the self-cancelation fails, **deadlock**
+- If it canceled, the caller is indefinitely suspended without termination (a.k.a. **deadlock**)
 
 Sometimes this is an appropriate semantic, and the cautiously-verbose `joinWithNever` function implements it for you. It is worth noting that this semantic was the *default* in Cats Effect 2 (and in fact, no other semantic was possible).
 

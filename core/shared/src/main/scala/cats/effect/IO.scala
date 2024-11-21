@@ -40,7 +40,7 @@ import cats.data.Ior
 import cats.effect.instances.spawn
 import cats.effect.kernel.CancelScope
 import cats.effect.kernel.GenTemporal.handleDuration
-import cats.effect.std.{Backpressure, Console, Env, Supervisor, UUIDGen}
+import cats.effect.std.{Backpressure, Console, Env, Supervisor, SystemProperties, UUIDGen}
 import cats.effect.tracing.{Tracing, TracingEvent}
 import cats.effect.unsafe.IORuntime
 import cats.syntax._
@@ -786,17 +786,27 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
     andWait(duration: Duration)
 
   /**
-   * Returns an IO that either completes with the result of the source within the specified time
-   * `duration` or otherwise raises a `TimeoutException`.
+   * Returns an IO that either completes with the result of the source or otherwise raises a
+   * `TimeoutException`.
    *
-   * The source is canceled in the event that it takes longer than the specified time duration
-   * to complete. Once the source has been successfully canceled (and has completed its
-   * finalizers), the `TimeoutException` will be raised. If the source is uncancelable, the
-   * resulting effect will wait for it to complete before raising the exception.
+   * The source is raced against the timeout `duration`, and its cancelation is triggered if the
+   * source doesn't complete within the specified time. The resulting effect will always wait
+   * for the source effect to complete (and to complete its finalizers), and will return the
+   * source's outcome over raising a `TimeoutException`.
+   *
+   * In case source and timeout complete simultaneously, the result of the source will be
+   * returned over raising a `TimeoutException`.
+   *
+   * If the source effect is uncancelable, a `TimeoutException` will never be raised.
    *
    * @param duration
-   *   is the time span for which we wait for the source to complete; in the event that the
-   *   specified time has passed without the source completing, a `TimeoutException` is raised
+   *   is the time span for which we wait for the source to complete before triggering its
+   *   cancelation; in the event that the specified time has passed without the source
+   *   completing, a `TimeoutException` is raised
+   *
+   * @see
+   *   [[timeoutAndForget]] for a variant which does not wait for cancelation of the source
+   *   effect to complete.
    */
   def timeout[A2 >: A](duration: Duration): IO[A2] =
     handleDuration(duration, this) { finiteDuration =>
@@ -809,26 +819,35 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
     timeout(duration: Duration)
 
   /**
-   * Returns an IO that either completes with the result of the source within the specified time
-   * `duration` or otherwise evaluates the `fallback`.
+   * Returns an IO that either completes with the result of the source or otherwise evaluates
+   * the `fallback`.
    *
-   * The source is canceled in the event that it takes longer than the specified time duration
-   * to complete. Once the source has been successfully canceled (and has completed its
-   * finalizers), the fallback will be sequenced. If the source is uncancelable, the resulting
-   * effect will wait for it to complete before evaluating the fallback.
+   * The source is raised against the timeout `duration`, and its cancelation is triggered if
+   * the source doesn't complete within the specified time. The resulting effect will always
+   * wait for the source effect to complete (and to complete its finalizers), and will return
+   * the source's outcome over sequencing the `fallback`.
+   *
+   * In case source and timeout complete simultaneously, the result of the source will be
+   * returned over sequencing the `fallback`.
+   *
+   * If the source in uncancelable, `fallback` will never be evaluated.
    *
    * @param duration
-   *   is the time span for which we wait for the source to complete; in the event that the
-   *   specified time has passed without the source completing, the `fallback` gets evaluated
+   *   is the time span for which we wait for the source to complete before triggering its
+   *   cancelation; in the event that the specified time has passed without the source
+   *   completing, the `fallback` gets evaluated
    *
    * @param fallback
    *   is the task evaluated after the duration has passed and the source canceled
    */
   def timeoutTo[A2 >: A](duration: Duration, fallback: IO[A2]): IO[A2] = {
     handleDuration[IO[A2]](duration, this) { finiteDuration =>
-      race(IO.sleep(finiteDuration)).flatMap {
-        case Right(_) => fallback
-        case Left(value) => IO.pure(value)
+      IO.uncancelable { poll =>
+        poll(racePair(IO.sleep(finiteDuration))) flatMap {
+          case Left((oc, f)) => f.cancel *> oc.embed(poll(IO.canceled) *> IO.never)
+          case Right((f, _)) =>
+            f.cancel *> f.join.flatMap { oc => oc.fold(fallback, IO.raiseError, identity) }
+        }
       }
     }
   }
@@ -1098,21 +1117,16 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
     val fiber = new IOFiber[A](
       if (IOFiberConstants.ioLocalPropagation) IOLocal.getThreadLocalState()
       else IOLocalState.empty,
-      oc =>
+      { oc =>
+        if (registerCallback) {
+          runtime.fiberErrorCbs.remove(failure)
+        }
         oc.fold(
-          {
-            runtime.fiberErrorCbs.remove(failure)
-            canceled
-          },
-          { t =>
-            runtime.fiberErrorCbs.remove(failure)
-            failure(t)
-          },
-          { ioa =>
-            runtime.fiberErrorCbs.remove(failure)
-            success(ioa.asInstanceOf[IO.Pure[A]].value)
-          }
-        ),
+          canceled,
+          failure,
+          { ioa => success(ioa.asInstanceOf[IO.Pure[A]].value) }
+        )
+      },
       this,
       runtime.compute,
       runtime
@@ -2163,6 +2177,8 @@ object IO extends IOCompanionPlatform with IOLowPriorityImplicits with TuplePara
     Console.make
 
   implicit val envForIO: Env[IO] = Env.make
+
+  implicit val systemPropertiesForIO: SystemProperties[IO] = SystemProperties.make
 
   // This is cached as a val to save allocations, but it uses ops from the Async
   // instance which is also cached as a val, and therefore needs to appear
