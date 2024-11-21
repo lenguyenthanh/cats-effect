@@ -18,7 +18,6 @@ package cats
 package effect
 package std
 
-import cats._
 import cats.effect.kernel._
 import cats.effect.std.Random.ScalaRandom
 
