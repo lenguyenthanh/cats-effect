@@ -21,35 +21,27 @@ import cats.data.{EitherT, IorT, Kleisli, OptionT, ReaderWriterStateT, StateT, W
 import cats.effect.kernel.Sync
 import cats.kernel.Monoid
 
-import org.typelevel.scalaccompat.annotation._
-
-import scala.collection.immutable.Map
-
 trait SystemProperties[F[_]] { self =>
 
   /**
-   * Retrieves the value for the specified key.
+   * Gets the system property indicated by `key`.
    */
   def get(key: String): F[Option[String]]
 
   /**
-   * Sets the value for the specified key to `value` disregarding any previous value for the
-   * same key.
+   * Sets the system property indicated by `key`.
    */
-  def set(key: String, value: String): F[Unit]
+  def set(key: String, value: String): F[Option[String]]
 
   /**
-   * Removes the property.
+   * Removes the system property indicated by `key`.
    */
-  def unset(key: String): F[Unit]
-
-  def entries: F[Map[String, String]]
+  def clear(key: String): F[Option[String]]
 
   def mapK[G[_]](f: F ~> G): SystemProperties[G] = new SystemProperties[G] {
-    def get(key: String): G[Option[String]] = f(self.get(key))
-    def set(key: String, value: String): G[Unit] = f(self.set(key, value))
-    def unset(key: String) = f(self.unset(key))
-    def entries: G[Map[String, String]] = f(self.entries)
+    def get(key: String) = f(self.get(key))
+    def set(key: String, value: String) = f(self.set(key, value))
+    def clear(key: String) = f(self.clear(key))
   }
 }
 
@@ -67,40 +59,40 @@ object SystemProperties {
   def make[F[_]](implicit F: Sync[F]): SystemProperties[F] = new SyncSystemProperties[F]
 
   /**
-   * [[Prop]] instance built for `cats.data.EitherT` values initialized with any `F` data type
-   * that also implements `Prop`.
+   * [[SystemProperties]] instance built for `cats.data.EitherT` values initialized with any `F`
+   * data type that also implements [[SystemProperties]].
    */
   implicit def catsEitherTSystemProperties[F[_]: SystemProperties: Functor, L]
       : SystemProperties[EitherT[F, L, *]] =
     SystemProperties[F].mapK(EitherT.liftK)
 
   /**
-   * [[Prop]] instance built for `cats.data.Kleisli` values initialized with any `F` data type
-   * that also implements `Prop`.
+   * [[SystemProperties]] instance built for `cats.data.Kleisli` values initialized with any `F`
+   * data type that also implements [[SystemProperties]].
    */
   implicit def catsKleisliSystemProperties[F[_]: SystemProperties, R]
       : SystemProperties[Kleisli[F, R, *]] =
     SystemProperties[F].mapK(Kleisli.liftK)
 
   /**
-   * [[Prop]] instance built for `cats.data.OptionT` values initialized with any `F` data type
-   * that also implements `Prop`.
+   * [[SystemProperties]] instance built for `cats.data.OptionT` values initialized with any `F`
+   * data type that also implements [[SystemProperties]].
    */
   implicit def catsOptionTSystemProperties[F[_]: SystemProperties: Functor]
       : SystemProperties[OptionT[F, *]] =
     SystemProperties[F].mapK(OptionT.liftK)
 
   /**
-   * [[Prop]] instance built for `cats.data.StateT` values initialized with any `F` data type
-   * that also implements `Prop`.
+   * [[SystemProperties]] instance built for `cats.data.StateT` values initialized with any `F`
+   * data type that also implements [[SystemProperties]].
    */
   implicit def catsStateTSystemProperties[F[_]: SystemProperties: Applicative, S]
       : SystemProperties[StateT[F, S, *]] =
     SystemProperties[F].mapK(StateT.liftK)
 
   /**
-   * [[Prop]] instance built for `cats.data.WriterT` values initialized with any `F` data type
-   * that also implements `Prop`.
+   * [[SystemProperties]] instance built for `cats.data.WriterT` values initialized with any `F`
+   * data type that also implements [[SystemProperties]].
    */
   implicit def catsWriterTSystemProperties[
       F[_]: SystemProperties: Applicative,
@@ -109,16 +101,16 @@ object SystemProperties {
     SystemProperties[F].mapK(WriterT.liftK)
 
   /**
-   * [[Prop]] instance built for `cats.data.IorT` values initialized with any `F` data type that
-   * also implements `Prop`.
+   * [[SystemProperties]] instance built for `cats.data.IorT` values initialized with any `F`
+   * data type that also implements [[SystemProperties]].
    */
   implicit def catsIorTSystemProperties[F[_]: SystemProperties: Functor, L]
       : SystemProperties[IorT[F, L, *]] =
     SystemProperties[F].mapK(IorT.liftK)
 
   /**
-   * [[Prop]] instance built for `cats.data.ReaderWriterStateT` values initialized with any `F`
-   * data type that also implements `Prop`.
+   * [[SystemProperties]] instance built for `cats.data.ReaderWriterStateT` values initialized
+   * with any `F` data type that also implements [[SystemProperties]].
    */
   implicit def catsReaderWriterStateTSystemProperties[
       F[_]: SystemProperties: Applicative,
@@ -131,22 +123,10 @@ object SystemProperties {
   private[std] final class SyncSystemProperties[F[_]](implicit F: Sync[F])
       extends SystemProperties[F] {
 
-    def get(key: String): F[Option[String]] =
-      F.delay(Option(System.getProperty(key))) // thread-safe
+    def get(key: String) = F.delay(Option(System.getProperty(key)))
 
-    def set(key: String, value: String): F[Unit] =
-      F.void(F.blocking(System.setProperty(key, value)))
+    def set(key: String, value: String) = F.blocking(Option(System.setProperty(key, value)))
 
-    def unset(key: String): F[Unit] = F.void(F.delay(System.clearProperty(key)))
-
-    @nowarn213("cat=deprecation")
-    @nowarn3("cat=deprecation")
-    def entries: F[Map[String, String]] =
-      F.blocking {
-        import scala.collection.JavaConverters._
-        val props = System.getProperties
-        val back = props.clone().asInstanceOf[java.util.Map[String, String]]
-        Map.empty ++ back.asScala
-      }
+    def clear(key: String) = F.blocking(Option(System.clearProperty(key)))
   }
 }
