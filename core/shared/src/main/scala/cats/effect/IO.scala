@@ -997,6 +997,12 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
    */
   def unsafeRunAsync(cb: Either[Throwable, A] => Unit)(
       implicit runtime: unsafe.IORuntime): Unit = {
+    unsafeRunAsyncImpl(cb)
+    ()
+  }
+
+  private[effect] def unsafeRunAsyncImpl(cb: Either[Throwable, A] => Unit)(
+      implicit runtime: unsafe.IORuntime): IOFiber[A @uncheckedVariance] =
     unsafeRunFiber(
       cb(Left(new CancellationException("The fiber was canceled"))),
       t => {
@@ -1007,8 +1013,6 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
       },
       a => cb(Right(a))
     )
-    ()
-  }
 
   def unsafeRunAsyncOutcome(cb: Outcome[Id, Throwable, A @uncheckedVariance] => Unit)(
       implicit runtime: unsafe.IORuntime): Unit = {
@@ -1111,7 +1115,8 @@ sealed abstract class IO[+A] private () extends IOPlatform[A] {
       implicit runtime: unsafe.IORuntime): IOFiber[A @uncheckedVariance] = {
 
     val fiber = new IOFiber[A](
-      Map.empty,
+      if (IOFiberConstants.ioLocalPropagation) IOLocal.getThreadLocalState()
+      else IOLocalState.empty,
       { oc =>
         if (registerCallback) {
           runtime.fiberErrorCbs.remove(failure)
