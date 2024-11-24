@@ -1302,17 +1302,6 @@ private[effect] trait ResourceHOInstances3 extends ResourceHOInstances4 {
 }
 
 private[effect] trait ResourceHOInstances4 extends ResourceHOInstances5 {
-  @deprecated(
-    "Bring an implicit MonadCancelThrow[F] into scope to get the fixed Resource instance",
-    "3.6.0")
-  implicit def catsEffectMonadErrorForResource[F[_], E](
-      implicit F0: MonadError[F, E]): MonadError[Resource[F, *], E] =
-    new ResourceMonadError[F, E] {
-      def F = F0
-    }
-}
-
-private[effect] trait ResourceHOInstances5 {
   implicit def catsEffectMonadForResource[F[_]]: Monad[Resource[F, *]] =
     new ResourceMonad[F]
 
@@ -1321,6 +1310,17 @@ private[effect] trait ResourceHOInstances5 {
     val _ = F
     catsEffectMonadForResource[F]
   }
+}
+
+private[effect] trait ResourceHOInstances5 {
+  @deprecated(
+    "Bring an implicit MonadCancelThrow[F] into scope to get the fixed Resource instance",
+    "3.6.0")
+  implicit def catsEffectMonadErrorForResource[F[_], E](
+      implicit F0: MonadError[F, E]): MonadError[Resource[F, *], E] =
+    new ResourceMonadError[F, E] {
+      def F = F0
+    }
 }
 
 abstract private[effect] class ResourceFOInstances0 extends ResourceFOInstances1 {
